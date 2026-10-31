@@ -1,0 +1,61 @@
+:root { color-scheme: dark; font-family: 'Space Mono', monospace; color: #e3ddd2; background: #101114; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { background: #101114; }
+canvas { display: block; }
+button { font: inherit; }
+.hollow-ui { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+.hud { position: absolute; inset: 0; text-shadow: 0 1px 6px #000; }
+.hud-corner { position: absolute; top: 30px; left: 32px; }
+.eyebrow { color: #b79b85; font-size: 9px; font-weight: 700; letter-spacing: .23em; }
+.biome { margin: 8px 0 20px; color: #eee8db; font: 600 28px/1 'Cormorant Garamond', Georgia, serif; letter-spacing: .08em; }
+.vitals { display: grid; gap: 8px; }
+.vital { display: flex; align-items: center; gap: 12px; }
+.vital-label { width: 65px; color: #bcb5aa; font-size: 9px; letter-spacing: .09em; }
+.vital-track { width: 120px; height: 3px; background: #ffffff24; }
+.vital-fill { display: block; width: 100%; height: 100%; background: #b75d55; transition: width .18s ease; }
+.vital-sanity .vital-fill { background: #a58bb6; }
+.vital-stamina .vital-fill { background: #b9b196; }
+.world-info { position: absolute; top: 32px; right: 32px; max-width: 35vw; color: #d4ccc0; font-size: 11px; text-align: right; line-height: 1.7; }
+.crosshair { position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; border: 1px solid #f4e8d6; border-radius: 50%; box-shadow: 0 0 5px #000; transform: translate(-50%,-50%); }
+.resume-hint { position: absolute; left: 50%; bottom: 103px; transform: translateX(-50%); padding: 8px 12px; color: #d8c7af; background: #111214cf; font-size: 9px; letter-spacing: .06em; white-space: nowrap; }
+.hotbar { position: absolute; left: 50%; bottom: 27px; display: flex; gap: 4px; transform: translateX(-50%); }
+.slot { position: relative; width: 58px; height: 58px; border: 1px solid #b2a79a43; background: #111214d9; color: #e6ded2; cursor: pointer; pointer-events: auto; }
+.slot:hover, .slot:focus-visible { border-color: #e1cead; }
+.slot.selected { border-color: #dfc7a4; background: #282622eb; box-shadow: 0 0 0 1px #dfc7a44a, 0 0 16px #d3ab6c22; }
+.slot-key { position: absolute; top: 3px; left: 5px; color: #a69e93; font-size: 9px; }
+.slot-icon { position: absolute; left: 18px; top: 15px; width: 22px; height: 22px; background: #6e665e; border: 1px solid #ffffff38; box-shadow: inset -5px -5px 0 #0004; transform: rotate(-3deg); }
+.block-1 { background: #706758; } .block-2 { background: #777880; } .block-3 { background: #6e4d3f; }
+.block-4 { background: #4b4e4c; } .block-5 { background: #a249a7; } .block-6 { background: #b25764; }
+.block-7 { background: #cbbda7; } .block-8 { background: #eab36c; box-shadow: 0 0 9px #eaa14a88; }
+.block-9 { background: #8a785e; } .block-10 { background: #9d5a52; } .block-11 { background: #3e393b; }
+.slot-name { position: absolute; bottom: 4px; left: 4px; max-width: 39px; overflow: hidden; color: #c4b9aa; font-size: 7px; text-transform: uppercase; white-space: nowrap; }
+.slot-count { position: absolute; right: 4px; bottom: 3px; font-size: 10px; }
+.menu-panel { position: absolute; left: 50%; top: 50%; width: min(490px, calc(100vw - 32px)); max-height: calc(100vh - 145px); padding: 30px 34px; overflow: auto; border: 1px solid #b2a28b66; background: #111214f2; box-shadow: 0 16px 80px #000b; transform: translate(-50%, -55%); pointer-events: auto; }
+.menu-panel h2 { margin: 7px 0 8px; font: 600 40px/1 'Cormorant Garamond', Georgia, serif; }
+.panel-copy, .menu-hint, .craft-feedback { color: #a69b8d; font-size: 10px; line-height: 1.8; }
+.menu-hint, .craft-feedback { margin-top: 24px; letter-spacing: .06em; }
+.inventory-grid { display: grid; grid-template-columns: repeat(3, 58px); gap: 6px; margin-top: 20px; }
+.recipes { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 20px; }
+.recipe { min-height: 67px; padding: 12px; border: 1px solid #a99d8c3d; background: #ffffff08; color: #e4dbcc; text-align: left; cursor: pointer; }
+.recipe:hover, .recipe:focus-visible { border-color: #d3b890; background: #cbb59318; }
+.recipe strong, .recipe span { display: block; }
+.recipe strong { font: 600 18px 'Cormorant Garamond', Georgia, serif; }
+.recipe span { margin-top: 4px; color: #ada195; font-size: 9px; }
+.screen-overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; pointer-events: auto; background: radial-gradient(ellipse at 50% 45%, #24211ee8 0%, #0a0c0ff7 68%); }
+.screen-overlay::before { position: absolute; inset: 0; border: 1px solid #a8917240; margin: 15px; content: ''; pointer-events: none; }
+.intro-card, .death-card { position: relative; width: min(620px, 100%); max-height: calc(100vh - 55px); overflow: auto; text-align: center; }
+.title { margin: 12px 0 2px; color: #ece5d8; font: 600 clamp(48px, 9vw, 92px)/.95 'Cormorant Garamond', Georgia, serif; letter-spacing: .1em; text-shadow: 0 0 40px #c4ad7d22; }
+.tagline { margin: 15px 0 24px; color: #bda794; font: italic 21px 'Cormorant Garamond', Georgia, serif; }
+.intro-copy { width: min(420px, 100%); margin: auto; color: #b6aaa0; font-size: 11px; line-height: 1.9; }
+.controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 10px; margin: 30px auto; padding: 22px 0; border-block: 1px solid #b2a28b33; }
+.control b, .control span { display: block; font-size: 9px; letter-spacing: .08em; }
+.control b { color: #e0d4c4; } .control span { margin-top: 5px; color: #8f857a; }
+.start-button { padding: 15px 32px; border: 1px solid #d4b79a; background: #b59a7c; color: #161413; font-size: 10px; font-weight: 700; letter-spacing: .17em; cursor: pointer; }
+.start-button:hover, .start-button:focus-visible { background: #e0c5a4; }
+.pointer-note { color: #8e8378; font-size: 9px; line-height: 1.8; }
+.death-screen { background: radial-gradient(ellipse, #311b1de8, #09090cfb 75%); }
+.death-title { margin: 10px; font: 600 clamp(48px, 8vw, 80px) 'Cormorant Garamond', Georgia, serif; }
+.death-card p { color: #b6a69e; font-size: 11px; }
+.hidden { display: none !important; }
+@media (max-width: 650px) { .hud-corner { top: 18px; left: 18px; } .world-info { top: 18px; right: 18px; } .biome { font-size: 22px; } .slot { width: 10vw; height: 52px; max-width: 51px; } .slot-icon { left: calc(50% - 10px); width: 20px; height: 20px; } .controls { gap: 12px 5px; } .control b, .control span { font-size: 8px; } .menu-panel { padding: 24px; } }
