@@ -2,6 +2,8 @@
 
 A first-person voxel survival horror prototype: explore strange biomes, mine and build, craft supplies, and fend off things that follow you.
 
+[Play the deployed prototype](https://hollowland-voxel-survival.chimske.workers.dev/)
+
 ## Run
 
 Install Node.js 20 or newer, then in this folder:
