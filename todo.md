@@ -1,5 +1,9 @@
 # Hollowland
 
+## Next priorities (playtest feedback)
+- [ ] Improve the aesthetic, especially the cheap-looking tree silhouettes and enemy models; preserve the working voxel world and build a more distinctive horror art direction.
+- [ ] Investigate the reported death while digging underground: reproduce, capture health/damage and descent details, and distinguish fall damage, enemy damage or a collision bug. No cause is confirmed yet.
+
 ## Prototype
 - [x] Chunked face-culled voxel terrain, five surface regions, Catacombs and basic sky/veins terrain.
 - [x] Movement, mining and placing, enemy pursuit/combat, hotbar, crafting, HUD and respawn.
