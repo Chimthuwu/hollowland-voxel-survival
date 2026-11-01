@@ -4,6 +4,13 @@
 - [ ] Improve the aesthetic, especially the cheap-looking tree silhouettes and enemy models; preserve the working voxel world and build a more distinctive horror art direction.
 - [ ] Investigate the reported death while digging underground: reproduce, capture health/damage and descent details, and distinguish fall damage, enemy damage or a collision bug. No cause is confirmed yet.
 
+## Progression & traversal (agreed 2026-11-01)
+- [ ] Build out real cave/cavern systems underground (the current tunnel field is a stub) — power-ups and ores live there.
+- [ ] Add mineable ore blocks underground.
+- [ ] Beam weapon: one gun, craftable from mined ores, firing a continuous beam used to chop trees, mine rock/ore and fight. Replaces instant-break mining with real progression feel.
+- [ ] Power-ups found in caves: gravity-reduction (higher jumps via lower gravity threshold) and platform-spawning (spawns sky platforms to jump between).
+- [ ] Sky traversal: low-gravity + spawned platforms as the route above the clouds to hidden sky areas and eventually space.
+
 ## Prototype
 - [x] Chunked face-culled voxel terrain, five surface regions, Catacombs and basic sky/veins terrain.
 - [x] Movement, mining and placing, enemy pursuit/combat, hotbar, crafting, HUD and respawn.
