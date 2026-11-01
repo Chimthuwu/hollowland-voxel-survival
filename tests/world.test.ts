@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { Block, biomeAt, World } from '../src/world';
+import { Block, biomeAt, ENTRANCES, World } from '../src/world';
 
 describe('voxel world', () => {
   it('does not create free sanity totems as natural biome decorations', () => {
@@ -84,6 +84,63 @@ describe('voxel world', () => {
     world.set(16, 100, 0, Block.Air);
     expect(counts()).toEqual([36]);
     world.dispose();
+  });
+
+  it('carves caverns with verticality across a range of depths', () => {
+    const world = new World(new THREE.Scene());
+    for (const depth of [-8, -20, -35, -50]) {
+      let air = 0;
+      for (let x = 0; x < 128; x += 2) for (let z = 0; z < 128; z += 2)
+        if (world.get(x, depth, z) === Block.Air) air++;
+      expect(air).toBeGreaterThan(0);
+    }
+  });
+
+  it('does not flood the underground: stone still dominates below the surface', () => {
+    const world = new World(new THREE.Scene());
+    let air = 0, total = 0;
+    for (let x = -32; x < 32; x += 2) for (let y = -40; y < -4; y += 2) for (let z = -32; z < 32; z += 2) {
+      total++; if (world.get(x, y, z) === Block.Air) air++;
+    }
+    expect(air / total).toBeGreaterThan(0.03);
+    expect(air / total).toBeLessThan(0.4);
+  });
+
+  it('connects the surface to the underground with walkable cave entrances', () => {
+    const world = new World(new THREE.Scene());
+    // BFS flood-fill through open cells (feet position with one block of headroom,
+    // steps of at most one block up/down). Every entrance must reach the cave layer.
+    const reachable = (ex: number, ez: number): boolean => {
+      const open = (cx: number, cy: number, cz: number) =>
+        world.get(cx, cy, cz) === Block.Air && world.get(cx, cy + 1, cz) === Block.Air;
+      const start: [number, number, number] = [ex, world.surface(ex, ez) + 1, ez];
+      const seen = new Set<string>([start.join(',')]);
+      const queue: Array<[number, number, number]> = [start];
+      while (queue.length) {
+        const [x, y, z] = queue.shift()!;
+        if (y <= -12) return true;
+        const ceiling = world.surface(ex, ez) + 8;
+        if (Math.abs(x - ex) > 50 || Math.abs(z - ez) > 50 || y < -25 || y > ceiling) continue;
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]]) {
+          for (const dy of [1, 0, -1]) {
+            if (dx === 0 && dz === 0 && dy === 0) continue;
+            const n: [number, number, number] = [x + dx, y + dy, z + dz];
+            const id = n.join(',');
+            if (!seen.has(id) && open(...n)) { seen.add(id); queue.push(n); }
+          }
+        }
+      }
+      return false;
+    };
+    for (const [ex, ez] of ENTRANCES) expect(reachable(ex, ez)).toBe(true);
+  }, 30000);
+
+  it('keeps the immediate spawn free of open shafts', () => {
+    const world = new World(new THREE.Scene());
+    for (let x = -4; x <= 4; x++) for (let z = -4; z <= 4; z++) {
+      const top = world.surface(x, z);
+      for (let y = top; y > top - 6; y--) expect(world.get(x, y, z)).not.toBe(Block.Air);
+    }
   });
 
   it('generates subterranean caverns and floating sky islands', () => {

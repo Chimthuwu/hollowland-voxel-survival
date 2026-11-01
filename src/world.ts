@@ -33,6 +33,33 @@ function noise(x: number, z: number): number {
   return a * (1 - sz) + b * sz;
 }
 
+const hash3 = (x: number, y: number, z: number) => {
+  const n = Math.sin(x * 127.1 + y * 269.5 + z * 311.7 + 74.7) * 43758.5453123;
+  return n - Math.floor(n);
+};
+/** Trilinear 3D value noise in [0,1). */
+function noise3(x: number, y: number, z: number): number {
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  const fx = x - ix, fy = y - iy, fz = z - iz;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy), sz = fz * fz * (3 - 2 * fz);
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const c000 = hash3(ix, iy, iz), c100 = hash3(ix + 1, iy, iz), c010 = hash3(ix, iy + 1, iz), c110 = hash3(ix + 1, iy + 1, iz);
+  const c001 = hash3(ix, iy, iz + 1), c101 = hash3(ix + 1, iy, iz + 1), c011 = hash3(ix, iy + 1, iz + 1), c111 = hash3(ix + 1, iy + 1, iz + 1);
+  return lerp(
+    lerp(lerp(c000, c100, sx), lerp(c010, c110, sx), sy),
+    lerp(lerp(c001, c101, sx), lerp(c011, c111, sx), sy), sz);
+}
+
+/**
+ * Deterministic surface cave entrances: each carves a walkable 2-wide staircase
+ * from the surface down into the cavern layer. Kept away from spawn.
+ */
+export const ENTRANCES: ReadonlyArray<readonly [number, number, number, number]> = [
+  // [x, z, dirX, dirZ] — direction of the descending ramp
+  [24, 18, 1, 0], [-34, 40, 0, 1], [48, -28, 0, -1],
+  [-18, -52, -1, 0], [72, 34, 1, 1], [116, -14, 0, -1],
+];
+
 const colors: Record<number, number> = {
   [Block.Dirt]: 0x555047, [Block.Stone]: 0x555761, [Block.Wood]: 0x4a3935,
   [Block.Mud]: 0x373a3c, [Block.Glitch]: 0x843c8b, [Block.Flesh]: 0x9f4e59,
@@ -79,6 +106,25 @@ export class World {
     return Math.floor(4 + noise(x / 30, z / 30) * 5 + noise(x / 9, z / 9) * 2);
   }
 
+  private shaftCells: Set<string> | null = null;
+  /** Lazily rasterizes the walkable staircase shafts from each surface entrance into the caves. */
+  private getShaftCells(): Set<string> {
+    if (this.shaftCells) return this.shaftCells;
+    const cells = new Set<string>();
+    for (const [ex, ez, dx, dz] of ENTRANCES) {
+      // Ramp: two horizontal steps per vertical step, 2x2 cross-section with 3 of headroom.
+      let cx = ex, cz = ez, cy = this.surface(ex, ez);
+      for (let i = 0; i < 44 && cy > -20; i++) {
+        for (let ox = 0; ox < 2; ox++) for (let oz = 0; oz < 2; oz++) for (let oy = 0; oy < 4; oy++)
+          cells.add(key(cx + ox, cy + oy, cz + oz));
+        cx += dx; cz += dz;
+        if (i % 2 === 1) cy--;
+      }
+    }
+    this.shaftCells = cells;
+    return cells;
+  }
+
   get(x: number, y: number, z: number): Block {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     const edit = this.edits.get(key(x, y, z));
@@ -97,10 +143,16 @@ export class World {
       }
       return Block.Air;
     }
+    // Surface entrances carve walkable shafts through anything below them.
+    if (y <= height && this.getShaftCells().has(key(x, y, z))) return Block.Air;
     if (y < -3) {
-      // A continuous 3D field produces navigable, irregular connected seams.
-      const tunnel = Math.sin(x * .13 + Math.sin(z * .08)) + Math.cos(z * .12 + y * .105) + Math.sin(y * .16 + x * .06);
-      if (tunnel > 1.15) return Block.Air;
+      // Keep the ground beneath spawn solid so the player never falls in at the start.
+      const spawnDist = Math.hypot(x, z);
+      if (spawnDist > 10) {
+        // Swiss-cheese caverns: low-frequency 3D noise field with a detail octave.
+        const cavern = noise3(x / 22, y / 16, z / 22) + (noise3(x / 7 + 40, y / 6 + 40, z / 7 + 40) - .5) * .22;
+        if (cavern > .645) return Block.Air;
+      }
       if (y < -48 && noise(x / 8 + y / 20, z / 8) > .62) return Block.Flesh;
       return y < -24 && noise(x / 13, z / 13 + y / 17) > .66 ? Block.Bone : Block.Stone;
     }

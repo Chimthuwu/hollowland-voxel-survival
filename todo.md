@@ -5,7 +5,7 @@
 - [ ] Investigate the reported death while digging underground: reproduce, capture health/damage and descent details, and distinguish fall damage, enemy damage or a collision bug. No cause is confirmed yet.
 
 ## Progression & traversal (agreed 2026-11-01)
-- [ ] Build out real cave/cavern systems underground (the current tunnel field is a stub) — power-ups and ores live there.
+- [x] Build out real cave/cavern systems underground — 3D-noise caverns at all depths with a detail octave, six deterministic walkable staircase entrances (BFS-verified from surface to y=-12), spawn kept shaft-free. Done 2026-11-01; ores/power-ups still open.
 - [ ] Add mineable ore blocks underground.
 - [ ] Beam weapon: one gun, craftable from mined ores, firing a continuous beam used to chop trees, mine rock/ore and fight. Replaces instant-break mining with real progression feel.
 - [ ] Power-ups found in caves: gravity-reduction (higher jumps via lower gravity threshold) and platform-spawning (spawns sky platforms to jump between).
