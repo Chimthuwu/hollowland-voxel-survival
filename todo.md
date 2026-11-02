@@ -1,8 +1,16 @@
 # Hollowland
 
-## Next priorities (playtest feedback)
-- [x] Improve the aesthetic: biome-keyed procedural trees with lean, branches and canopies merged into the chunk mesh (`src/foliage.ts`), plus deliberate enemy silhouettes with shared materials and a breathing idle (`src/entities.ts`). Done 2026-11-02.
-- [ ] Investigate the reported death while digging underground. A debug overlay now exists (F3) showing position, velocity, biome, vitals, last fall impact and the last 8 damage events tagged by source (fall / enemy / lightning / hazard / unknown). **No cause confirmed yet** — the overlay was added to gather evidence, not to fix it.
+## Direction (agreed 2026-11-02)
+Psychedelic 3D Terraria-like: colorful pixel-arcade beauty, cute at times, deeply horrific + gore where applicable. Default biome overcast-but-not-monochrome; wide biome variety; tiered tool/item progression by ore rarity; multiplayer via the SkyJump3D WebSocket-relay pattern; vehicles/weapons ported from SkyJump3D later. Full map: `HOLLOWLAND — Project Map & Roadmap.md` (on the owner's desktop, for the reviewer).
+
+## Next priorities
+- [ ] Finish the art pivot: recolor storm/glitch/psychosis/maw palettes; fruits that drop as pickups; enemy hit flash / death animations / gore / drops; pixel-arcade HUD + item icons.
+- [ ] Progression core (top priority): ore tiers by depth/biome, tool tiers (pick + blade per material, speed/damage scaling), tool durability, gate bare-hand insta-mining, flavorful item names (borrow Euclydia's registry or new — low priority either way).
+- [ ] Multiplayer: port the SkyJump3D `ws` relay (rooms, ≤6 players); sync player state + world edits only (world is deterministic from noise); host-authoritative enemies.
+- [ ] Investigate the reported death while digging underground. The debug overlay (F3) records damage source/height/biome for every hit — diagnose the next occurrence. No cause confirmed yet.
+
+## Playtest feedback (older)
+- [x] Improve the aesthetic: biome-keyed procedural trees (`src/foliage.ts`), deliberate enemy silhouettes with walk cycles (`src/entities.ts`). Done 2026-11-02 — then upgraded same day: per-biome tree styles (lavender conifers with sky-blue fruit, windswept, corrupted, weeping, stalks), enemy walk/jaw/orbit animation, beetle/moth/dragonfly remodel, terracotta dirt + per-voxel dither + violet dusk sky, and a fix for trees being emitted into two chunks (z-fighting, doubled vertices). Deployed.
 
 ## Progression & traversal (agreed 2026-11-01)
 - [x] Build out real cave/cavern systems underground — 3D-noise caverns at all depths with a detail octave, six deterministic walkable staircase entrances (BFS-verified from surface to y=-12), spawn kept shaft-free. Done 2026-11-01.
