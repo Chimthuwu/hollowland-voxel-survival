@@ -11,6 +11,7 @@ import { Avatar } from './avatar';
 import { nearbyLight } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
 import { canBreak, effectiveTier, meleeDamage } from './tools';
+import { Pickups } from './pickups';
 import { BeamWeapon } from './beam';
 import { PowerUps, REDUCED_GRAVITY, trySpawnPlatform } from './powerups';
 import { Critters } from './critters';
@@ -47,6 +48,7 @@ const beam = new BeamWeapon(scene, world, camera);
 const powerups = new PowerUps();
 PowerUps.placeAll(world);
 const hooks = new BiomeHooks(world);
+const loot = new Pickups(scene, (x, y, z) => world.get(x, y, z) !== Block.Air);
 const inventory = new Inventory();
 let menuOpen = false, started = false, dead = false, deathTimer = 0;
 const settings = loadSettings();
@@ -136,7 +138,11 @@ renderer.domElement.addEventListener('mousedown',e=>{
       }
       return;
     }
-    if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,meleeDamage(effectiveTier(inventory.toolTier,inventory.beam),inventory.weapon?24:12))){audio.event('hit');return;}
+    if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,meleeDamage(effectiveTier(inventory.toolTier,inventory.beam),inventory.weapon?24:12),(pos,kind)=>{
+      // A dead mob drops a raw morsel. Heavier kinds drop more.
+      const count=kind==='crawler'||kind==='stalker'?2:1;
+      for(let i=0;i<count;i++) loot.spawn(Block.Morsel,pos.clone().setY(pos.y+.4),1);
+    })){audio.event('hit');return;}
     if(hit){
       // Tier gate: a block that needs a better tool than the player owns is
       // simply refused, with a reason on the HUD.
@@ -145,6 +151,8 @@ renderer.domElement.addEventListener('mousedown',e=>{
       if(!gate.ok){ui.toast(gate.reason);return;}
       if(inventory.add(hit.id)){
         world.set(hit.x,hit.y,hit.z,Block.Air);chisel.clear(hit.x,hit.y,hit.z);audio.event('break');
+        // Chopping a tree shakes the fruit loose.
+        if(hit.id===Block.Wood&&Math.random()<.35) loot.spawn(Block.Skyfruit,new THREE.Vector3(hit.x+.5,hit.y+.5,hit.z+.5));
         if(tier>0&&!inventory.beam){if(inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');}
       }
     }
@@ -168,8 +176,17 @@ renderer.domElement.addEventListener('mousedown',e=>{
   }
 });
 renderer.domElement.addEventListener('mouseup',e=>{if(e.button===0)beam.setMouse(false);});
-function damage(n:number, source:DamageSource='unknown'){if(dead||!started)return;health=clamp(health-n,0,100);audio.event('hurt');overlay.recordDamage({t:time,source,amount:n,y:player.position.y,biome:activeBiome});if(health<=0){dead=true;deathTimer=3;ui.setDeath(true);keys.clear();}}
-function respawn(){dead=false;health=sanity=stamina=100;gravity=1;player.position.copy(spawn);player.verticalVelocity=0;enemies.clear();critters.clear();ui.setDeath(false);}
+// Every lethal hit names itself on the death screen, so a player who dies
+// underground immediately knows what did it (fall, enemy, storm or hazard).
+const DEATH_CAUSES: Record<DamageSource, string> = {
+  fall: 'A SHEER DROP BROKE YOU AGAINST THE DARK.',
+  enemy: 'SOMETHING FOUND YOU IN THE TUNNELS.',
+  lightning: 'THE STORM STRUCK YOU DOWN.',
+  hazard: 'THE LAND ITSELF DRANK YOUR LIFE.',
+  unknown: 'IT WAS SOMETHING ELSE.',
+};
+function damage(n:number, source:DamageSource='unknown'){if(dead||!started)return;health=clamp(health-n,0,100);audio.event('hurt');overlay.recordDamage({t:time,source,amount:n,y:player.position.y,biome:activeBiome});if(health<=0){dead=true;deathTimer=3;ui.setDeath(true,DEATH_CAUSES[source]);keys.clear();}}
+function respawn(){dead=false;health=sanity=stamina=100;gravity=1;player.position.copy(spawn);player.verticalVelocity=0;enemies.clear();critters.clear();loot.clear();ui.setDeath(false);}
 let restoration=false, lit=false,restoreTimer=0;
 function strike(){const angle=Math.random()*Math.PI*2,r=Math.random()*30,x=Math.floor(player.position.x+Math.cos(angle)*r),z=Math.floor(player.position.z+Math.sin(angle)*r),y=world.surface(x,z)+1;flash.position.set(x,y+5,z);flash.intensity=100;flashTimer=.18;audio.event('thunder');if(Math.hypot(player.position.x-x,player.position.y-y,player.position.z-z)<3)damage(20,'lightning');for(let dx=-2;dx<=2;dx++)for(let dy=-2;dy<=2;dy++)for(let dz=-2;dz<=2;dz++)if(dx*dx+dy*dy+dz*dz<=4 && world.get(x+dx,y+dy,z+dz)===Block.Wood)world.set(x+dx,y+dy,z+dz,Block.Scorched);}
 function animate(){requestAnimationFrame(animate);const now=performance.now()/1000,dt=Math.min(.05,now-(time||now));time=now;
@@ -199,6 +216,7 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       enemies.update(dt,p,activeBiome,(n)=>damage(n,'enemy'));
       critters.update(dt,p,activeBiome);
       const pickups=powerups.update(world,p.x,p.y,p.z);for(const k of pickups)audio.event(k==='gravity'?'shift':'break');
+      for(const id of loot.update(dt,p)){ if(inventory.add(id))audio.event('break'); }
       restoreTimer-=dt;if(restoreTimer<=0){restoreTimer=1;const proximity=nearbyLight(world,p,activeBiome);restoration=proximity.restore;lit=proximity.lit;}
       if(restoration)sanity=clamp(sanity+7*dt,0,100);else if(activeBiome==='psychosis')sanity=clamp(sanity-3*dt,0,100);else if(activeBiome==='maw'||activeBiome==='glitch'||activeBiome==='veins')sanity=clamp(sanity-.8*dt,0,100);
       if(hook.sanityDrain>0)sanity=clamp(sanity-hook.sanityDrain*dt,0,100);

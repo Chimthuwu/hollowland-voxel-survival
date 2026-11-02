@@ -2,6 +2,12 @@ import * as THREE from 'three';
 import { Block, type Biome, type World } from './world';
 
 type Kind = 'stalker' | 'node' | 'crawler' | 'hallucination';
+export type { Kind };
+
+/** Seconds a dying mob spends shrinking and sinking before it is removed. */
+const DEATH_TIME = 0.38;
+/** Seconds the white-hot hit flash lasts. */
+const HIT_FLASH_TIME = 0.14;
 
 /** Animated sub-rigs per mob. `userData.base` holds the rest pose each channel animates around. */
 interface MobParts {
@@ -30,6 +36,12 @@ type Mob = {
   parts: MobParts;
   /** Accumulated walk-cycle phase. */
   walkT: number;
+  /** Seconds of hit flash remaining. */
+  hitFlash: number;
+  /** Seconds of death animation remaining; 0 means alive. */
+  dying: number;
+  /** The meshes that get swapped to the flash material. */
+  meshes: THREE.Mesh[];
 };
 
 const stats: Record<Kind, { hp: number; speed: number; damage: number }> = {
@@ -219,6 +231,8 @@ export class Enemies {
   private simTime = 0;
   /** Cached per-kind materials, built once. Disposed in dispose(). */
   private readonly materials: Record<Kind, THREE.MeshStandardMaterial>;
+  /** White-hot material swapped in briefly when a mob is hit. Shared per kind. */
+  private readonly flashMaterials: Record<Kind, THREE.MeshStandardMaterial>;
 
   constructor(private readonly scene: THREE.Scene, private readonly world: Pick<World, 'get' | 'surface'>) {
     this.materials = {
@@ -226,6 +240,17 @@ export class Enemies {
       node:          buildMaterial('node'),
       crawler:       buildMaterial('crawler'),
       hallucination: buildMaterial('hallucination'),
+    };
+    // One white-hot material per kind. Mobs swap to it on a hit and back after,
+    // so there is no per-spawn material allocation.
+    const flash = (wireframe: boolean) => new THREE.MeshStandardMaterial({
+      color: 0xffffff, emissive: 0xffd9d0, emissiveIntensity: 1.6, roughness: .5, wireframe,
+    });
+    this.flashMaterials = {
+      stalker: flash(false),
+      node: flash(true),
+      crawler: flash(false),
+      hallucination: flash(false),
     };
   }
 
@@ -236,6 +261,8 @@ export class Enemies {
     const { root, parts } = buildMesh(kind, material);
     root.position.copy(position);
     this.scene.add(root);
+    const meshes: THREE.Mesh[] = [];
+    root.traverse(obj => { if (obj instanceof THREE.Mesh) meshes.push(obj); });
     this.mobs.push({
       root, kind, ...data,
       cooldown: 0,
@@ -245,6 +272,9 @@ export class Enemies {
       phase: Math.random() * Math.PI * 2,
       parts,
       walkT: Math.random() * 6,
+      hitFlash: 0,
+      dying: 0,
+      meshes,
     });
   }
   update(dt: number, player: THREE.Vector3, biome: Biome, onDamage: (amount: number) => void): void {
@@ -269,6 +299,26 @@ export class Enemies {
       const mob = this.mobs[i];
       const p = mob.root.position;
       mob.cooldown = Math.max(0, mob.cooldown - dt);
+
+      // Hit flash: swap to the white-hot material, then swap back.
+      if (mob.hitFlash > 0) {
+        mob.hitFlash -= dt;
+        if (mob.hitFlash <= 0) {
+          const normal = this.materials[mob.kind];
+          for (const mesh of mob.meshes) mesh.material = normal;
+        }
+      }
+
+      // Death animation: shrink and sink, then the mob is removed.
+      if (mob.dying > 0) {
+        mob.dying -= dt;
+        const t = Math.max(0, mob.dying / DEATH_TIME);
+        mob.root.scale.setScalar(t * t);
+        mob.root.rotation.y += dt * 7;
+        p.y -= dt * 1.6;
+        if (mob.dying <= 0) { this.remove(i); continue; }
+        continue;
+      }
 
       const dx = player.x - p.x;
       const dz = player.z - p.z;
@@ -317,7 +367,7 @@ export class Enemies {
       }
     }
   }
-  attack(origin:THREE.Vector3,direction:THREE.Vector3,range:number,damage:number):boolean {
+  attack(origin:THREE.Vector3,direction:THREE.Vector3,range:number,damage:number,onKill?:(position:THREE.Vector3,kind:Kind)=>void):boolean {
     const dir=direction.clone().normalize();let best=-1,near=range;
     for(let i=0;i<this.mobs.length;i++){
       const mob=this.mobs[i], center=mob.root.position.clone().add(new THREE.Vector3(0,mob.kind==='crawler'?.5:1,0));
@@ -326,7 +376,20 @@ export class Enemies {
       best=i;near=along;
     }
     if(best<0)return false;
-    const mob=this.mobs[best];mob.hp-=damage;if(mob.hp<=0)this.remove(best);else {mob.root.position.addScaledVector(dir,.18);}
+    const mob=this.mobs[best];mob.hp-=damage;
+    // Flash the mob white for a beat so the hit reads.
+    mob.hitFlash=HIT_FLASH_TIME;
+    for(const mesh of mob.meshes) mesh.material=this.flashMaterials[mob.kind];
+    if(mob.hp<=0){
+      // Start the death animation instead of vanishing, and report the kill so
+      // the caller can drop loot where the mob fell.
+      mob.dying=DEATH_TIME;
+      const flash=this.flashMaterials[mob.kind];
+      for(const mesh of mob.meshes) mesh.material=flash;
+      onKill?.(mob.root.position.clone(), mob.kind);
+    } else {
+      mob.root.position.addScaledVector(dir,.18);
+    }
     return true;
   }
   clear(): void {
@@ -337,6 +400,7 @@ export class Enemies {
   dispose(): void {
     this.clear();
     for (const mat of Object.values(this.materials)) mat.dispose();
+    for (const mat of Object.values(this.flashMaterials)) mat.dispose();
     EYES_MATERIAL.dispose();
     CORE_MATERIAL.dispose();
   }

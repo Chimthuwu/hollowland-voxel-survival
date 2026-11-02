@@ -179,6 +179,7 @@ export class UI {
   private readonly root: HTMLElement;
   private readonly intro: HTMLElement;
   private readonly death: HTMLElement;
+  private readonly deathCause: HTMLElement;
   private readonly inventoryPanel: HTMLElement;
   private readonly inventoryGrid: HTMLElement;
   private readonly craftingPanel: HTMLElement;
@@ -319,8 +320,9 @@ export class UI {
 
     this.death = node('div', 'screen-overlay death-screen hidden');
     const deathCard = node('div', 'death-card');
-    deathCard.append(node('div', 'eyebrow', 'THE HOLLOW REMEMBERS'), node('h2', 'death-title', 'GAME OVER'),
-      node('p', '', 'The dark takes what it is owed.'));
+    deathCard.append(node('div', 'eyebrow', 'THE HOLLOW REMEMBERS'), node('h2', 'death-title', 'GAME OVER'));
+    this.deathCause = node('p', '', 'The dark takes what it is owed.');
+    deathCard.append(this.deathCause);
     this.death.append(deathCard);
     this.root.append(hud, this.inventoryPanel, this.craftingPanel, this.settingsPanel, this.intro, this.death);
     document.body.append(this.root);
@@ -356,7 +358,14 @@ export class UI {
   toggleCrafting(): void { this.setPanel(this.openPanel === 'crafting' ? null : 'crafting'); }
   toggleSettings(): void { this.setPanel(this.openPanel === 'settings' ? null : 'settings'); }
   close(): void { this.setPanel(null); }
-  setDeath(visible: boolean): void { this.death.classList.toggle('hidden', !visible); if (visible) this.close(); this.updateResumeHint(); }
+  /** Shows/hides the death screen, with the cause of death as flavour text. */
+  setDeath(visible: boolean, cause?: string): void {
+    if (visible && cause) this.deathCause.textContent = cause;
+    else if (visible) this.deathCause.textContent = 'The dark takes what it is owed.';
+    this.death.classList.toggle('hidden', !visible);
+    if (visible) this.close();
+    this.updateResumeHint();
+  }
   setStarted(started: boolean): void { this.intro.classList.toggle('hidden', started); this.updateResumeHint(); }
 
   private updateResumeHint(): void {

@@ -3,6 +3,11 @@ import { appendFoliage, type FoliageBuffers } from './foliage';
 import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
 
 export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem }
+
+/** The display colour of a block type, used by pickups and other decorations. */
+export function blockColor(id: Block): number {
+  return colors[id] ?? 0xff00ff;
+}
 export type Biome = 'overcast' | 'storm' | 'glitch' | 'psychosis' | 'maw' | 'catacombs' | 'veins' | 'sky';
 
 /** The surface regions form strips along +X; negative X remains the spawn region. */
