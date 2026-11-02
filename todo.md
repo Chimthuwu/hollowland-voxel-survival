@@ -3,6 +3,9 @@
 ## Direction (agreed 2026-11-02)
 Psychedelic 3D Terraria-like: colorful pixel-arcade beauty, cute at times, deeply horrific + gore where applicable. Default biome overcast-but-not-monochrome; wide biome variety; tiered tool/item progression by ore rarity; multiplayer via the SkyJump3D WebSocket-relay pattern; vehicles/weapons ported from SkyJump3D later. Full map: `HOLLOWLAND — Project Map & Roadmap.md` (on the owner's desktop, for the reviewer).
 
+## Hotfixes
+- [x] Purple-void deployment: the texture-atlas shader injected `vUv` (doesn't exist on the map path in three r170 — use `vMapUv`) and declared the `vFoliage` varying inside `main()` (illegal GLSL), so the terrain material failed to compile and every chunk mesh was skipped — flat background + entities only. Both fixed, build/tests green, deployed 2026-11-03. A `window.__dbg` handle (scene/world/error log) was left in main.ts for remote diagnosis — remove when convenient.
+
 ## Next priorities
 - [ ] Finish the art pivot: recolor storm/glitch/psychosis/maw palettes; fruits that drop as pickups; enemy hit flash / death animations / gore / drops; pixel-arcade HUD + item icons.
 - [x] Progression core: ore tiers by depth (copper -14..-3, crystal -32..-14, echo gem -52..-32), tool tiers driven by knapping quality (rough=1, good=2, fine=3), bare-hand insta-mining gated to soft blocks, tool durability that drops a tier when it runs out, melee damage and beam DPS scaled by tier, tool tier + durability persisted in the save schema (v1 saves migrate forward). Done 2026-11-02.
