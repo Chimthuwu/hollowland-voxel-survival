@@ -9,6 +9,10 @@ import { Inventory, UI } from './ui';
 import { Player } from './player';
 import { Avatar } from './avatar';
 import { nearbyLight } from './lighting';
+import { DebugOverlay, type DamageSource } from './debugOverlay';
+import { BeamWeapon } from './beam';
+import { PowerUps, REDUCED_GRAVITY, trySpawnPlatform } from './powerups';
+import { Critters } from './critters';
 import './style.css';
 
 const clamp = THREE.MathUtils.clamp;
@@ -29,7 +33,11 @@ const flash = new THREE.PointLight(0xdcecff,0,45); scene.add(flash);
 const lantern = new THREE.PointLight(0xffb86b,0,12); scene.add(lantern);
 const world = new World(scene);
 const enemies = new Enemies(scene,world);
+const critters = new Critters(scene,world);
 const audio = new AudioEngine();
+const beam = new BeamWeapon(scene, world, camera);
+const powerups = new PowerUps();
+PowerUps.placeAll(world);
 const inventory = new Inventory();
 let menuOpen = false, started = false, dead = false, deathTimer = 0;
 const ui = new UI(inventory, open => { menuOpen = open; if (open && document.pointerLockElement) document.exitPointerLock(); });
@@ -37,7 +45,8 @@ const player = new Player(0.5,world.surface(0,0)+1.01,0.5);
 const avatar = new Avatar(scene);
 const spawn = player.position.clone();
 let health=100, sanity=100, stamina=100, yaw=0, pitch=0, gravity=1, thirdPerson=false, activeBiome:Biome='overcast';
-let time=0, gravityTimer=0, lightningTimer=6, flashTimer=0, effectTimer=0, invertTimer=0, footsteps=0;
+let time=0, gravityTimer=0, lightningTimer=6, flashTimer=0, effectTimer=0, invertTimer=0, footsteps=0, lastImpact=0;
+const overlay = new DebugOverlay();
 const keys = new Set<string>(); let jumpQueued=false;
 const fog = scene.fog as THREE.FogExp2;
 const composer = new EffectComposer(renderer); composer.addPass(new RenderPass(scene,camera));
@@ -72,17 +81,27 @@ renderer.domElement.addEventListener('mousedown',e=>{
   const origin=player.position.clone().add(new THREE.Vector3(0,1.57,0));
   camera.getWorldDirection(aimDirection); const hit=world.raycast(origin,aimDirection,6);
   if(e.button===0){
+    if(inventory.beam){
+      beam.setMouse(true);
+      return;
+    }
     if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,inventory.weapon?24:12)){audio.event('hit');return;}
     if(hit){ if(inventory.add(hit.id)){world.set(hit.x,hit.y,hit.z,Block.Air);audio.event('break');} }
-  } else if(e.button===2 && hit){
-    const item=inventory.selectedItem();const p=hit.previous;
-    if(item && item.count>0 && !overlapsPlayer(p.x,p.y,p.z) && world.get(p.x,p.y,p.z)===Block.Air){world.set(p.x,p.y,p.z,item.id);inventory.remove(item.id,1);}
+  } else if(e.button===2){
+    // Platform-seed power-up: right-click drops a scaffold underfoot if the cell is air.
+    if(powerups.hasPlatform && trySpawnPlatform(world,player.position.x,player.position.y,player.position.z)){
+      audio.event('break');
+      return;
+    }
+    if(hit){const item=inventory.selectedItem();const p=hit.previous;
+      if(item && item.count>0 && !overlapsPlayer(p.x,p.y,p.z) && world.get(p.x,p.y,p.z)===Block.Air){world.set(p.x,p.y,p.z,item.id);inventory.remove(item.id,1);}}
   }
 });
-function damage(n:number){if(dead||!started)return;health=clamp(health-n,0,100);audio.event('hurt');if(health<=0){dead=true;deathTimer=3;ui.setDeath(true);keys.clear();}}
-function respawn(){dead=false;health=sanity=stamina=100;gravity=1;player.position.copy(spawn);player.verticalVelocity=0;enemies.clear();ui.setDeath(false);}
+renderer.domElement.addEventListener('mouseup',e=>{if(e.button===0)beam.setMouse(false);});
+function damage(n:number, source:DamageSource='unknown'){if(dead||!started)return;health=clamp(health-n,0,100);audio.event('hurt');overlay.recordDamage({t:time,source,amount:n,y:player.position.y,biome:activeBiome});if(health<=0){dead=true;deathTimer=3;ui.setDeath(true);keys.clear();}}
+function respawn(){dead=false;health=sanity=stamina=100;gravity=1;player.position.copy(spawn);player.verticalVelocity=0;enemies.clear();critters.clear();ui.setDeath(false);}
 let restoration=false, lit=false,restoreTimer=0;
-function strike(){const angle=Math.random()*Math.PI*2,r=Math.random()*30,x=Math.floor(player.position.x+Math.cos(angle)*r),z=Math.floor(player.position.z+Math.sin(angle)*r),y=world.surface(x,z)+1;flash.position.set(x,y+5,z);flash.intensity=100;flashTimer=.18;audio.event('thunder');if(Math.hypot(player.position.x-x,player.position.y-y,player.position.z-z)<3)damage(20);for(let dx=-2;dx<=2;dx++)for(let dy=-2;dy<=2;dy++)for(let dz=-2;dz<=2;dz++)if(dx*dx+dy*dy+dz*dz<=4 && world.get(x+dx,y+dy,z+dz)===Block.Wood)world.set(x+dx,y+dy,z+dz,Block.Scorched);}
+function strike(){const angle=Math.random()*Math.PI*2,r=Math.random()*30,x=Math.floor(player.position.x+Math.cos(angle)*r),z=Math.floor(player.position.z+Math.sin(angle)*r),y=world.surface(x,z)+1;flash.position.set(x,y+5,z);flash.intensity=100;flashTimer=.18;audio.event('thunder');if(Math.hypot(player.position.x-x,player.position.y-y,player.position.z-z)<3)damage(20,'lightning');for(let dx=-2;dx<=2;dx++)for(let dy=-2;dy<=2;dy++)for(let dz=-2;dz<=2;dz++)if(dx*dx+dy*dy+dz*dz<=4 && world.get(x+dx,y+dy,z+dz)===Block.Wood)world.set(x+dx,y+dy,z+dz,Block.Scorched);}
 function animate(){requestAnimationFrame(animate);const now=performance.now()/1000,dt=Math.min(.05,now-(time||now));time=now;
   if(started){
     if(dead){deathTimer-=dt;if(deathTimer<=0)respawn();}
@@ -99,24 +118,30 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       const sprint=keys.has('ShiftLeft')&&stamina>0&&(forward!==0||strafe!==0);stamina=clamp(stamina+(sprint?-18:12)*dt,0,100);
       if(invertTimer>0)invertTimer-=dt;else if(activeBiome==='psychosis'&&sanity<35&&Math.random()<dt*.08)invertTimer=2;
       const sign=invertTimer>0?-1:1,under=world.get(Math.floor(p.x),Math.floor(p.y-.08),Math.floor(p.z));
-      const impact=player.step(dt,{forward:forward*sign,strafe:strafe*sign,jump:jumpQueued,yaw},(x,y,z)=>world.get(x,y,z)!==Block.Air,gravity,activeBiome==='storm'&&exposed?2:0,(sprint?1.45:1)*(under===Block.Mud?.6:1));jumpQueued=false;
-      if(impact>11)damage((impact-11)*3);
+      const stepGravity = powerups.hasGravity ? gravity * REDUCED_GRAVITY : gravity;
+      const impact=player.step(dt,{forward:forward*sign,strafe:strafe*sign,jump:jumpQueued,yaw},(x,y,z)=>world.get(x,y,z)!==Block.Air,stepGravity,activeBiome==='storm'&&exposed?2:0,(sprint?1.45:1)*(under===Block.Mud?.6:1));jumpQueued=false;lastImpact=impact;
+      if(impact>11)damage((impact-11)*3,'fall');
       if(under===Block.Flesh && (forward||strafe)){footsteps-=dt;if(footsteps<=0){audio.event('squelch');footsteps=.55;}}
-      enemies.update(dt,p,activeBiome,damage);
+      enemies.update(dt,p,activeBiome,(n)=>damage(n,'enemy'));
+      critters.update(dt,p,activeBiome);
+      const pickups=powerups.update(world,p.x,p.y,p.z);for(const k of pickups)audio.event(k==='gravity'?'shift':'break');
       restoreTimer-=dt;if(restoreTimer<=0){restoreTimer=1;const proximity=nearbyLight(world,p,activeBiome);restoration=proximity.restore;lit=proximity.lit;}
       if(restoration)sanity=clamp(sanity+7*dt,0,100);else if(activeBiome==='psychosis')sanity=clamp(sanity-3*dt,0,100);else if(activeBiome==='maw'||activeBiome==='glitch'||activeBiome==='veins')sanity=clamp(sanity-.8*dt,0,100);
     }
     world.update(p,time);rain.visible=activeBiome==='storm' && exposed;rain.position.set(p.x,p.y,p.z);if(rain.visible){for(let i=0;i<600;i++){rainPositions[i*3+1]-=dt*12;if(rainPositions[i*3+1]<0)rainPositions[i*3+1]=20;}rainGeo.attributes.position.needsUpdate=true;}
     camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));camera.position.add(back);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
+    if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id)=>{inventory.add(id);audio.event('break');});}
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
     post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'?1:0;post.uniforms.uPsy.value=activeBiome==='psychosis'?1:0;
-    effectTimer-=dt;const info=activeBiome==='glitch'?`ERROR: THE BIOME YOU HAVE ENTERED HAS CRASHED · GRAVITY ${gravity}×`:invertTimer>0?'YOUR HANDS ARE NOT YOUR OWN':`Y ${Math.floor(p.y)} · ${thirdPerson?'THIRD PERSON':'FIRST PERSON'}`;
+    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const info=powerStr+(activeBiome==='glitch'?`ERROR: THE BIOME YOU HAVE ENTERED HAS CRASHED · GRAVITY ${gravity}×`:invertTimer>0?'YOUR HANDS ARE NOT YOUR OWN':`Y ${Math.floor(p.y)} · ${thirdPerson?'THIRD PERSON':'FIRST PERSON'}`);
     ui.update(health,sanity,stamina,activeBiome,info);
+    overlay.recordFrame(dt);
+    overlay.render(time,{x:p.x,y:p.y,z:p.z,vy:player.verticalVelocity,biome:activeBiome,health,sanity,stamina,gravity,impact:lastImpact});
   }
   composer.render();
 }
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight);});
 world.update(player.position,0);ui.update(health,sanity,stamina,activeBiome,'');animate();
 // Development-only inspection hooks for repeatable browser acceptance tests.
-if(import.meta.env.DEV) (window as unknown as {__hollowland:unknown}).__hollowland={player,world,inventory,enemies,damage,scene,ui,get state(){return {health,sanity,stamina,activeBiome,gravity,dead,started,menuOpen};}};
+if(import.meta.env.DEV) (window as unknown as {__hollowland:unknown}).__hollowland={player,world,inventory,enemies,damage,scene,ui,overlay,beam,powerups,get state(){return {health,sanity,stamina,activeBiome,gravity,dead,started,menuOpen,lastImpact};}};

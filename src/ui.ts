@@ -1,6 +1,6 @@
 import { Block, type Biome } from './world';
 
-export type Recipe = 'torch' | 'weapon' | 'scaffold' | 'totem';
+export type Recipe = 'torch' | 'weapon' | 'scaffold' | 'totem' | 'beam';
 export type InventorySlot = { id: Block; count: number };
 
 // Ingredient amounts are kept here so they can be tuned without changing the UI.
@@ -9,6 +9,7 @@ export const RECIPES: Record<Recipe, { name: string; description: string }> = {
   weapon: { name: 'Stone blade', description: '2 wood + 3 stone' },
   scaffold: { name: 'Scaffold ×4', description: '2 wood' },
   totem: { name: 'Warding totem', description: '3 stone + 2 glitch / flesh' },
+  beam: { name: 'Beam weapon', description: '5 crystal — a continuous mining tool' },
 };
 
 const NAMES: Record<number, string> = {
@@ -16,12 +17,15 @@ const NAMES: Record<number, string> = {
   [Block.Wood]: 'Wood', [Block.Mud]: 'Mud', [Block.Glitch]: 'Glitch',
   [Block.Flesh]: 'Flesh', [Block.Bone]: 'Bone', [Block.Torch]: 'Torch',
   [Block.Scaffold]: 'Scaffold', [Block.Totem]: 'Totem', [Block.Scorched]: 'Scorched',
+  [Block.Crystal]: 'Crystal', [Block.GravityCharm]: 'Gravity charm',
+  [Block.PlatformSeed]: 'Platform seed',
 };
 
 export class Inventory {
   slots: InventorySlot[] = [];
   selected = 0;
   weapon = false;
+  beam = false;
 
   add(id: Block, count = 1): boolean {
     if (id === Block.Air || !Number.isInteger(count) || count <= 0) return false;
@@ -54,6 +58,7 @@ export class Inventory {
     trial.slots = this.slots.map(slot => ({ ...slot }));
     trial.selected = this.selected;
     trial.weapon = this.weapon;
+    trial.beam = this.beam;
     let success = false;
     switch (recipe) {
       case 'torch':
@@ -74,11 +79,16 @@ export class Inventory {
           && (flesh === 0 || trial.remove(Block.Flesh, flesh)) && trial.add(Block.Totem);
         break;
       }
+      case 'beam':
+        success = !trial.beam && trial.remove(Block.Crystal, 5);
+        if (success) trial.beam = true;
+        break;
     }
     if (!success) return false;
     this.slots = trial.slots;
     this.selected = trial.selected;
     this.weapon = trial.weapon;
+    this.beam = trial.beam;
     return true;
   }
 }
@@ -218,7 +228,7 @@ export class UI {
   }
 
   private refresh(): void {
-    const signature = JSON.stringify([this.inventory.slots, this.inventory.selected, this.inventory.weapon]);
+    const signature = JSON.stringify([this.inventory.slots, this.inventory.selected, this.inventory.weapon, this.inventory.beam]);
     if (signature === this.signature) return;
     this.signature = signature;
     this.hotbar.replaceChildren();

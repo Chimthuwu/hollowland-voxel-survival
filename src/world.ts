@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { appendFoliage, type FoliageBuffers } from './foliage';
 
-export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched }
+export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed }
 export type Biome = 'overcast' | 'storm' | 'glitch' | 'psychosis' | 'maw' | 'catacombs' | 'veins' | 'sky';
 
 /** The surface regions form strips along +X; negative X remains the spawn region. */
@@ -65,6 +66,9 @@ const colors: Record<number, number> = {
   [Block.Mud]: 0x373a3c, [Block.Glitch]: 0x843c8b, [Block.Flesh]: 0x9f4e59,
   [Block.Bone]: 0xbeb09b, [Block.Torch]: 0xf7a44b, [Block.Scaffold]: 0x6e6355,
   [Block.Totem]: 0x7b423e, [Block.Scorched]: 0x28252a,
+  [Block.Crystal]: 0x6fe0d0,
+  [Block.GravityCharm]: 0xc7b3ff,
+  [Block.PlatformSeed]: 0x8fe6c0,
 };
 // Each face is counter-clockwise as seen from outside the block.
 const faces = [
@@ -136,7 +140,8 @@ export class World {
       return island > .62 && y <= islandTop && y >= islandTop - 3 ? Block.Stone : Block.Air;
     }
     if (y > height) {
-      // Sparse silhouettes away from spawn, with no nondeterministic RNG.
+      // Trunk blocks stay mineable; foliage.ts renders the full tree (canopy,
+      // branches, lean) into the chunk mesh at these same spots.
       if ((Math.abs(x) > 10 || Math.abs(z) > 10) && hash(x, z) > .985 && y <= height + 3) {
         const b = biomeAt(x, height, z);
         return b === 'glitch' ? Block.Glitch : b === 'psychosis' ? Block.Bone : b === 'maw' ? Block.Flesh : Block.Wood;
@@ -154,6 +159,11 @@ export class World {
         if (cavern > .645) return Block.Air;
       }
       if (y < -48 && noise(x / 8 + y / 20, z / 8) > .62) return Block.Flesh;
+      // Crystal ore: scattered clusters in the deep stone layer (-8..-30), with brighter pockets.
+      if (y >= -30 && y <= -8) {
+        const ore = noise3(x / 9, y / 9, z / 9);
+        if (ore > .78) return Block.Crystal;
+      }
       return y < -24 && noise(x / 13, z / 13 + y / 17) > .66 ? Block.Bone : Block.Stone;
     }
     const biome = biomeAt(x, height, z);
@@ -222,6 +232,9 @@ export class World {
         indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
       }
     }
+    // Append trees into the same chunk geometry so we pay one extra draw call per chunk, not per tree.
+    const foliage: FoliageBuffers = { positions, normals, tint, effects, indices };
+    appendFoliage(foliage, cx, cy, cz, (x, z) => this.surface(x, z), biomeAt);
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
