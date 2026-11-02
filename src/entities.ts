@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { Block, type Biome, type World } from './world';
+import { exposureAt, MOB_LIGHT } from './lighting';
 
-type Kind = 'stalker' | 'node' | 'crawler' | 'hallucination';
+type Kind = 'stalker' | 'node' | 'crawler' | 'hallucination' | 'skitter' | 'thrasher' | 'cresthorn';
 export type { Kind };
 
 /** Seconds a dying mob spends shrinking and sinking before it is removed. */
@@ -42,13 +43,27 @@ type Mob = {
   dying: number;
   /** The meshes that get swapped to the flash material. */
   meshes: THREE.Mesh[];
+  /** Body scale: big creatures read as big. */
+  size: number;
+  /** Telegraphed charge state machine (thrasher / cresthorn). */
+  charge: { state: 'roam' | 'wary' | 'lunge' | 'recover'; timer: number; dirX: number; dirZ: number };
+  /** Stalker head twitch: abrupt, out-of-sync, wrong. */
+  twitchT: number;
+  tiltZ: number;
 };
 
-const stats: Record<Kind, { hp: number; speed: number; damage: number }> = {
-  stalker:       { hp: 30, speed: 3,   damage: 10 },
-  node:          { hp: 20, speed: 3,   damage: 15 },
-  crawler:       { hp: 25, speed: 5,   damage: 12 },
-  hallucination: { hp: 20, speed: 3.8, damage: 8  },
+const stats: Record<Kind, { hp: number; speed: number; damage: number; size: number }> = {
+  stalker:       { hp: 30,  speed: 3,   damage: 10, size: 1 },
+  node:          { hp: 20,  speed: 3,   damage: 15, size: 1 },
+  crawler:       { hp: 25,  speed: 5,   damage: 12, size: 1 },
+  hallucination: { hp: 20,  speed: 3.8, damage: 8,  size: 1 },
+  // Giant burrow bug: towers over the player, still fast and cheap in a
+  // pack — a swarm of them reads as a stampede, not a nuisance.
+  skitter:       { hp: 18,  speed: 4.4, damage: 7,  size: 1.8 },
+  // Armoured beetle: slow, tanky, lunges from a readable telegraphed wind-up.
+  thrasher:      { hp: 66,  speed: 2.1, damage: 18, size: 1.15 },
+  // Territorial dinosaur: rare, huge, gives a warning display before charging.
+  cresthorn:     { hp: 150, speed: 1.7, damage: 24, size: 2.6 },
 };
 
 function kindFor(b: Biome): Kind {
@@ -64,6 +79,12 @@ function buildMaterial(kind: Kind): THREE.MeshStandardMaterial {
     case 'crawler':       return new THREE.MeshStandardMaterial({ color: 0x6a1c25, roughness: .92, emissive: 0x180404, emissiveIntensity: .35 });
     case 'node':          return new THREE.MeshStandardMaterial({ color: 0xe62db5, roughness: .8,  emissive: 0x6c0d52, emissiveIntensity: .9,  wireframe: true });
     case 'hallucination': return new THREE.MeshStandardMaterial({ color: 0x252028, roughness: .85, emissive: 0x150d20, emissiveIntensity: .25, transparent: true, opacity: .78 });
+    // Skitter: dark chitin with a faint sickly sheen.
+    case 'skitter':       return new THREE.MeshStandardMaterial({ color: 0x3a4740, roughness: .55, metalness: .25, emissive: 0x0c1812, emissiveIntensity: .4 });
+    // Thrasher: plum-plated shell, like polished armour.
+    case 'thrasher':      return new THREE.MeshStandardMaterial({ color: 0x5c2330, roughness: .6,  emissive: 0x1c060a, emissiveIntensity: .35 });
+    // Cresthorn: dusty sage hide — a territorial grazer, not a shadow creature.
+    case 'cresthorn':     return new THREE.MeshStandardMaterial({ color: 0x6d7258, roughness: .95 });
     case 'stalker':
     default:              return new THREE.MeshStandardMaterial({ color: 0x151316, roughness: .9,  emissive: 0x080406, emissiveIntensity: .15 });
   }
@@ -71,6 +92,8 @@ function buildMaterial(kind: Kind): THREE.MeshStandardMaterial {
 
 const EYES_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xff3524 });
 const CORE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xff5cd9 });
+const AMBER_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffb44a });
+const CREST_MATERIAL = new THREE.MeshStandardMaterial({ color: 0xb44a3a, roughness: .8, emissive: 0x3a0c08, emissiveIntensity: .5 });
 
 function boxAt(parent: THREE.Object3D, material: THREE.Material, w: number, h: number, d: number, x: number, y: number, z: number): THREE.Mesh {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
@@ -92,9 +115,9 @@ function limbAt(parent: THREE.Object3D, material: THREE.Material, x: number, y: 
   return g;
 }
 
-function addEyes(parent: THREE.Object3D, x: number, y: number, z: number, size = .06): void {
+function addEyes(parent: THREE.Object3D, x: number, y: number, z: number, size = .06, material: THREE.MeshBasicMaterial = EYES_MATERIAL): void {
   for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.BoxGeometry(size, size * .85, .02), EYES_MATERIAL);
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(size, size * .85, .02), material);
     eye.position.set(sx * x, y, z);
     parent.add(eye);
   }
@@ -105,6 +128,7 @@ function buildStalker(material: THREE.Material): { root: THREE.Group; parts: Mob
   const root = new THREE.Group();
   const sway = new THREE.Group();
   sway.rotation.x = .16; // permanent hunch
+  sway.userData.baseZ = 0;
   root.add(sway);
   // Torso, shoulders and pelvis.
   boxAt(sway, material, .48, .8, .26, 0, 1.35, 0);
@@ -214,11 +238,109 @@ function buildNode(material: THREE.Material): { root: THREE.Group; parts: MobPar
   return { root, parts: { limbs: [], jaws: [], sway, orbiters } };
 }
 
+/** Skitter: knee-high swarm bug — dome body, whipping antennae, six flicking legs. */
+function buildSkitter(material: THREE.Material): { root: THREE.Group; parts: MobParts } {
+  const root = new THREE.Group();
+  const body = boxAt(root, material, .42, .26, .5, 0, .22, .02);
+  body.rotation.x = -.06;
+  boxAt(root, material, .24, .16, .22, 0, .3, -.3);       // head capsule
+  addEyes(root, .06, .34, -.38, .05, AMBER_MATERIAL);     // two amber pinheads
+  for (const sx of [-1, 1]) {
+    const antenna = boxAt(root, material, .02, .02, .3, sx * .08, .4, -.44);
+    antenna.userData.base = 0;
+    antenna.rotation.x = -.9;
+  }
+  const limbs: THREE.Object3D[] = [];
+  for (const sx of [-1, 1]) for (let i = 0; i < 3; i++) {
+    const hip = new THREE.Group();
+    hip.position.set(sx * .2, .26, -.16 + i * .17);
+    hip.userData.base = 0;
+    const leg = boxAt(hip, material, .04, .06, .04, sx * .16, -.03, 0);
+    leg.rotation.z = sx * -.9;
+    boxAt(hip, material, .03, .16, .03, sx * .26, -.1, 0).rotation.z = sx * .4;
+    root.add(hip);
+    limbs.push(hip);
+  }
+  return { root, parts: { limbs, jaws: [], sway: root, orbiters: [] } };
+}
+
+/** Thrasher: plated beetle tank — domed shell, pale seam, two front scythe arms. */
+function buildThrasher(material: THREE.Material): { root: THREE.Group; parts: MobParts } {
+  const root = new THREE.Group();
+  const shell = boxAt(root, material, 1.05, .5, 1.3, 0, .5, .05);
+  shell.rotation.x = -.08;
+  boxAt(root, material, .86, .3, 1.0, 0, .78, .05);       // raised dome
+  const seam = boxAt(root, material, .06, .1, 1.24, 0, .72, .05);
+  void seam;
+  boxAt(root, material, .5, .3, .36, 0, .42, -.78);       // armoured brow/head
+  addEyes(root, .13, .52, -.9, .06, AMBER_MATERIAL);
+  const limbs: THREE.Object3D[] = [];
+  // Two front scythe pivots (the telegraph raises them before the lunge).
+  for (const sx of [-1, 1]) {
+    const arm = limbAt(root, material, sx * .28, .55, .55, .14, -1.1);
+    const blade = boxAt(arm, material, .05, .45, .16, 0, -.6, .04);
+    blade.rotation.x = .35;
+    limbs.push(arm);
+  }
+  for (const sx of [-1, 1]) for (let i = 0; i < 3; i++) {
+    const hip = new THREE.Group();
+    hip.position.set(sx * .55, .45, -.35 + i * .38);
+    hip.userData.base = 0;
+    const femur = boxAt(hip, material, .34, .07, .07, sx * .16, -.07, 0);
+    femur.rotation.z = sx * -.95;
+    const tibia = boxAt(hip, material, .06, .28, .06, sx * .3, -.24, 0);
+    tibia.rotation.z = sx * .38;
+    root.add(hip);
+    limbs.push(hip);
+  }
+  return { root, parts: { limbs, jaws: [], sway: root, orbiters: [] } };
+}
+
+/** Cresthorn: big territorial dinosaur — columnar legs, long neck, coral crest fin. */
+function buildCresthorn(material: THREE.Material): { root: THREE.Group; parts: MobParts } {
+  const root = new THREE.Group();
+  const sway = new THREE.Group();
+  sway.position.y = 1.35;
+  root.add(sway);
+  // Barrel torso with a slight forward slope.
+  boxAt(sway, material, 1.25, .85, 2.35, 0, .35, .1);
+  boxAt(sway, material, 1.05, .5, .9, 0, .55, -1.0);      // shoulder mass
+  // Tapering tail, two segments.
+  boxAt(sway, material, .8, .5, 1.1, 0, .28, 1.55);
+  boxAt(sway, material, .5, .28, 1.0, 0, .2, 2.4);
+  // Long neck on a pivot: the warning display rears it back.
+  const neck = new THREE.Group();
+  neck.position.set(0, .6, -1.15);
+  neck.rotation.x = -.5;
+  neck.userData.baseX = -.5;
+  sway.add(neck);
+  boxAt(neck, material, .38, 1.15, .38, 0, .55, 0);
+  const head = boxAt(neck, material, .4, .34, .55, 0, 1.2, -.12);
+  void head;
+  // The crest: a coral fin ridge across the skull.
+  const crest = boxAt(neck, CREST_MATERIAL, .08, .5, .62, 0, 1.5, -.1);
+  crest.rotation.x = .25;
+  addEyes(neck, .11, 1.22, -.3, .06, AMBER_MATERIAL);
+  // Four columnar legs.
+  const limbs: THREE.Object3D[] = [];
+  for (const sz of [-1, 1]) for (const sx of [-1, 1]) {
+    const leg = limbAt(sway, material, sx * .62, .1, 1.35, .26, sz * .12);
+    leg.position.z = sz * .85;
+    const foot = boxAt(leg, material, .36, .12, .5, 0, -1.32, -.04);
+    void foot;
+    limbs.push(leg);
+  }
+  return { root, parts: { limbs, jaws: [], sway, orbiters: [] } };
+}
+
 function buildMesh(kind: Kind, material: THREE.Material): { root: THREE.Group; parts: MobParts } {
   switch (kind) {
     case 'node':          return buildNode(material);
     case 'crawler':       return buildCrawler(material);
     case 'hallucination': return buildHallucination(material);
+    case 'skitter':       return buildSkitter(material);
+    case 'thrasher':      return buildThrasher(material);
+    case 'cresthorn':     return buildCresthorn(material);
     case 'stalker':
     default:              return buildStalker(material);
   }
@@ -240,6 +362,9 @@ export class Enemies {
       node:          buildMaterial('node'),
       crawler:       buildMaterial('crawler'),
       hallucination: buildMaterial('hallucination'),
+      skitter:       buildMaterial('skitter'),
+      thrasher:      buildMaterial('thrasher'),
+      cresthorn:     buildMaterial('cresthorn'),
     };
     // One white-hot material per kind. Mobs swap to it on a hit and back after,
     // so there is no per-spawn material allocation.
@@ -251,14 +376,23 @@ export class Enemies {
       node: flash(true),
       crawler: flash(false),
       hallucination: flash(false),
+      skitter: flash(false),
+      thrasher: flash(false),
+      cresthorn: flash(false),
     };
   }
 
+  /** Spawns by biome: the shapeshift path used by tests and dev hooks. */
   spawn(biome: Biome, position: THREE.Vector3): void {
-    const kind = kindFor(biome);
+    this.spawnKind(kindFor(biome), position);
+  }
+
+  /** Spawns a specific kind at a position. */
+  spawnKind(kind: Kind, position: THREE.Vector3): void {
     const data = stats[kind];
     const material = this.materials[kind];
     const { root, parts } = buildMesh(kind, material);
+    root.scale.setScalar(data.size);
     root.position.copy(position);
     this.scene.add(root);
     const meshes: THREE.Mesh[] = [];
@@ -275,23 +409,55 @@ export class Enemies {
       hitFlash: 0,
       dying: 0,
       meshes,
+      size: data.size,
+      charge: { state: 'roam', timer: 0, dirX: 0, dirZ: 1 },
+      twitchT: Math.random() * 2,
+      tiltZ: 0,
     });
   }
-  update(dt: number, player: THREE.Vector3, biome: Biome, onDamage: (amount: number) => void): void {
+
+  /**
+   * The Overcast roster: light decides who lives here. Warm, open ground
+   * belongs to oversized wildlife (skitter swarms, thrashers, the rare
+   * cresthorn); deep shade and night belong to the stalkers.
+   */
+  private spawnOvercast(x: number, groundY: number, z: number, phase: number): void {
+    const exposure = exposureAt(this.world, x, groundY, z, phase);
+    const count = (k: Kind) => this.mobs.reduce((n, m) => n + (m.kind === k ? 1 : 0), 0);
+    const at = new THREE.Vector3(x, groundY, z);
+    if (exposure < MOB_LIGHT.stalkerHide) {
+      if (Math.random() < .6) this.spawnKind('stalker', at);
+      return;
+    }
+    const roll = Math.random();
+    if (roll < .4 && count('skitter') < 9) {
+      const pack = 2 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < pack; i++)
+        this.spawnKind('skitter', new THREE.Vector3(x + (Math.random() - .5) * 3, groundY, z + (Math.random() - .5) * 3));
+    } else if (roll < .68 && count('thrasher') < 2) {
+      this.spawnKind('thrasher', at);
+    } else if (roll < .74 && count('cresthorn') < 1) {
+      this.spawnKind('cresthorn', at);
+    }
+  }
+
+  update(dt: number, player: THREE.Vector3, biome: Biome, onDamage: (amount: number) => void, phase = .3, playerLit = false): void {
     dt = Math.min(.05, Math.max(0, dt));
     this.spawnTimer -= dt;
     this.simTime += dt;
 
     if (this.spawnTimer <= 0) {
-      this.spawnTimer = biome === 'overcast' ? 11 : 6;
-      if (this.mobs.length < 10) {
+      this.spawnTimer = biome === 'overcast' ? 10 : 6;
+      if (this.mobs.length < 12) {
         const a = Math.random() * Math.PI * 2;
-        const r = 11 + Math.random() * 5;
+        const r = 12 + Math.random() * 5; // never pops in right beside the player
         const x = player.x + Math.sin(a) * r;
         const z = player.z + Math.cos(a) * r;
         const ground = player.y < 0 ? Math.floor(player.y) : this.world.surface(x, z) + 1;
-        if (this.world.get(x, ground, z) === Block.Air && this.world.get(x, ground + 1, z) === Block.Air)
-          this.spawn(biome, new THREE.Vector3(x, ground, z));
+        if (this.world.get(x, ground, z) === Block.Air && this.world.get(x, ground + 1, z) === Block.Air) {
+          if (biome === 'overcast') this.spawnOvercast(x, ground, z, phase);
+          else this.spawn(biome, new THREE.Vector3(x, ground, z));
+        }
       }
     }
 
@@ -313,7 +479,7 @@ export class Enemies {
       if (mob.dying > 0) {
         mob.dying -= dt;
         const t = Math.max(0, mob.dying / DEATH_TIME);
-        mob.root.scale.setScalar(t * t);
+        mob.root.scale.setScalar(t * t * mob.size);
         mob.root.rotation.y += dt * 7;
         p.y -= dt * 1.6;
         if (mob.dying <= 0) { this.remove(i); continue; }
@@ -323,30 +489,110 @@ export class Enemies {
       const dx = player.x - p.x;
       const dz = player.z - p.z;
       const dist = Math.hypot(dx, dz);
-
-      // Idle "breathing": subtle per-mob scale oscillation, phased so groups don't sync.
-      const breathe = 1 + Math.sin(this.simTime * 1.7 + mob.phase) * .025;
-      mob.root.scale.set(breathe, breathe, breathe);
-
       if (dist > 42) { this.remove(i); continue; }
-      const chase = dist < 20 && dist > .9;
-      if(chase){
-        let step=mob.speed*dt;
-        if(mob.kind==='node'){mob.teleport-=dt;if(mob.teleport<=0){step=Math.min(2,dist-1);mob.teleport=2+Math.random();}}
-        const nx=p.x+dx/dist*step,nz=p.z+dz/dist*step;
-        if(this.world.get(nx,p.y+.3,nz)!==Block.Air){
-          if(this.world.get(nx,p.y+1.1,nz)===Block.Air&&this.world.get(nx,p.y+2,nz)===Block.Air&&Math.abs(mob.vy)<.01)mob.vy=6.2;
-        } else {p.x=nx;p.z=nz;}
-        mob.root.rotation.y=Math.atan2(-dx,-dz);
+
+      // Idle "breathing": subtle per-mob scale oscillation, phased so groups
+      // don't sync. Wary chargers add a rapid visible pulse — the telegraph.
+      const breathe = 1 + Math.sin(this.simTime * 1.7 + mob.phase) * .025
+        + (mob.charge.state === 'wary' ? Math.sin(this.simTime * 17) * .07 : 0);
+      mob.root.scale.set(breathe * mob.size, breathe * mob.size, breathe * mob.size);
+
+      // --- Behaviour selection -------------------------------------------------
+      let chase = dist < 20 && dist > .9;
+      let moveX = chase ? dx / dist : 0, moveZ = chase ? dz / dist : 0;
+      let step = chase ? mob.speed * dt : 0;
+      let faceAway = false; // true when moving outward (flee/retreat), to face travel direction
+
+      if (mob.kind === 'stalker') {
+        // Bright open ground dulls their senses; shade and night sharpen them.
+        const exposure = exposureAt(this.world, p.x, p.y, p.z, phase);
+        const detect = exposure < MOB_LIGHT.stalkerHide ? 20 : exposure < MOB_LIGHT.stalkerHunt ? 12 : 7;
+        chase = dist < detect && dist > .9;
+        moveX = chase ? dx / dist : 0; moveZ = chase ? dz / dist : 0;
+        step = chase ? mob.speed * dt : 0;
+        // A placed light close by burns them: recoil from it instead of fighting.
+        if (playerLit && dist < 6.5) {
+          chase = false;
+          moveX = -dx / dist; moveZ = -dz / dist;
+          step = mob.speed * .75 * dt;
+          faceAway = true;
+        }
+      } else if (mob.kind === 'skitter') {
+        // Swarms chase; a lone skitter loses its nerve and bolts.
+        let allies = 0;
+        for (const other of this.mobs) {
+          if (other !== mob && other.kind === 'skitter' && other.root.position.distanceToSquared(p) < 49) allies++;
+        }
+        if (allies === 0 && dist < 15) {
+          chase = false;
+          moveX = -dx / (dist + 1e-4); moveZ = -dz / (dist + 1e-4);
+          step = mob.speed * 1.2 * dt;
+          faceAway = true;
+        }
+      } else if (mob.kind === 'thrasher' || mob.kind === 'cresthorn') {
+        // Telegraphed charger: stalk → wind-up pause → lunge → recover.
+        const c = mob.charge;
+        chase = false;
+        if (c.state === 'roam') {
+          if (dist < 10) { c.state = 'wary'; c.timer = mob.kind === 'cresthorn' ? 1.15 : .7; }
+        } else if (c.state === 'wary') {
+          c.timer -= dt;
+          if (c.timer <= 0) {
+            if (dist < 12) {
+              c.state = 'lunge';
+              c.timer = mob.kind === 'cresthorn' ? .55 : .42;
+              c.dirX = dx / (dist + 1e-4); c.dirZ = dz / (dist + 1e-4);
+            } else c.state = 'roam';
+          }
+        } else if (c.state === 'lunge') {
+          moveX = c.dirX; moveZ = c.dirZ;
+          step = (mob.kind === 'cresthorn' ? 8 : 9.5) * dt;
+          c.timer -= dt;
+          if (c.timer <= 0) { c.state = 'recover'; c.timer = 1.7; }
+        } else {
+          // Backing off after a committed lunge — the window to retaliate.
+          c.timer -= dt;
+          moveX = -dx / (dist + 1e-4); moveZ = -dz / (dist + 1e-4);
+          step = mob.speed * .5 * dt;
+          faceAway = true;
+          if (c.timer <= 0) c.state = 'roam';
+        }
       }
-      mob.vy=Math.max(-20,mob.vy-20*dt);const next=p.y+mob.vy*dt;
-      if(mob.vy<=0&&this.world.get(p.x,next-.05,p.z)!==Block.Air){p.y=Math.floor(next-.05)+1;mob.vy=0;}else if(mob.vy>0&&this.world.get(p.x,next+1.7,p.z)!==Block.Air)mob.vy=0;else p.y=next;
-      if(dist<1.15&&Math.abs(p.y-player.y)<1.8&&mob.cooldown<=0){if(mob.fake){this.remove(i);continue;}onDamage(mob.damage);mob.cooldown=1;}
+
+      // --- Movement over terrain ------------------------------------------------
+      if (step > 0) {
+        if (mob.kind === 'node' && chase) {
+          mob.teleport -= dt;
+          if (mob.teleport <= 0) { step = Math.min(2, dist - 1); mob.teleport = 2 + Math.random(); }
+        }
+        const nx = p.x + moveX * step, nz = p.z + moveZ * step;
+        if (this.world.get(nx, p.y + .3, nz) !== Block.Air) {
+          if (this.world.get(nx, p.y + 1.1, nz) === Block.Air && this.world.get(nx, p.y + 2 * mob.size, nz) === Block.Air && Math.abs(mob.vy) < .01) mob.vy = 6.2;
+        } else { p.x = nx; p.z = nz; }
+      }
+      // Face travel; wary chargers and lurkers face the player.
+      if (step > 0) {
+        const fx = faceAway ? moveX : chase || mob.charge.state !== 'lunge' ? dx / (dist + 1e-4) : moveX;
+        const fz = faceAway ? moveZ : chase || mob.charge.state !== 'lunge' ? dz / (dist + 1e-4) : moveZ;
+        mob.root.rotation.y = Math.atan2(-fx, -fz);
+      }
+
+      mob.vy = Math.max(-20, mob.vy - 20 * dt);
+      const next = p.y + mob.vy * dt;
+      if (mob.vy <= 0 && this.world.get(p.x, next - .05, p.z) !== Block.Air) { p.y = Math.floor(next - .05) + 1; mob.vy = 0; }
+      else if (mob.vy > 0 && this.world.get(p.x, next + 1.7 * mob.size, p.z) !== Block.Air) mob.vy = 0;
+      else p.y = next;
+      if (dist < 1.15 * Math.max(1, mob.size) && Math.abs(p.y - player.y) < 1.8 && mob.cooldown <= 0) {
+        if (mob.fake) { this.remove(i); continue; }
+        onDamage(mob.damage);
+        mob.cooldown = 1;
+      }
 
       // --- Procedural animation ---
-      // Walk cycle swings limbs while chasing; a slow drift keeps them alive when idle.
-      mob.walkT += dt * (chase ? mob.speed * 2.5 : 1.3);
-      const amp = chase ? .5 : .055;
+      // Walk cycle swings limbs while moving; a slow drift keeps them alive when idle.
+      const moving = step > 0;
+      mob.walkT += dt * (moving ? mob.speed * 2.5 : 1.3);
+      const amp = moving ? .5 : .055;
       for (let li = 0; li < mob.parts.limbs.length; li++) {
         const limb = mob.parts.limbs[li];
         limb.rotation.x = (limb.userData.base as number ?? 0)
@@ -357,7 +603,15 @@ export class Enemies {
         for (let j = 0; j < mob.parts.jaws.length; j++)
           mob.parts.jaws[j].rotation.y = (mob.parts.jaws[j].userData.base as number) + (j === 0 ? chit : -chit);
       }
-      if (mob.kind === 'hallucination') {
+      if (mob.kind === 'stalker') {
+        // The head-tilt twitch: abrupt, unsynced pauses that read as "wrong".
+        mob.twitchT -= dt;
+        if (mob.twitchT <= 0) {
+          mob.twitchT = 1.1 + Math.random() * 2.6;
+          mob.tiltZ = (Math.random() - .5) * (chase ? .3 : .55);
+        }
+        (mob.parts.sway.rotation as THREE.Euler).z = ((mob.parts.sway.userData.baseZ as number) ?? 0) + mob.tiltZ;
+      } else if (mob.kind === 'hallucination') {
         mob.parts.sway.rotation.z = Math.sin(this.simTime * .8 + mob.phase) * .07;
       } else if (mob.kind === 'node') {
         mob.parts.sway.position.y = (mob.parts.sway.userData.baseY as number) + Math.sin(this.simTime * 1.3 + mob.phase) * .12;
@@ -367,31 +621,36 @@ export class Enemies {
       }
     }
   }
-  attack(origin:THREE.Vector3,direction:THREE.Vector3,range:number,damage:number,onKill?:(position:THREE.Vector3,kind:Kind)=>void):boolean {
-    const dir=direction.clone().normalize();let best=-1,near=range;
-    for(let i=0;i<this.mobs.length;i++){
-      const mob=this.mobs[i], center=mob.root.position.clone().add(new THREE.Vector3(0,mob.kind==='crawler'?.5:1,0));
-      const delta=center.sub(origin), along=delta.dot(dir);if(along<0||along>near)continue;
-      if(delta.addScaledVector(dir,-along).length()>.8)continue;
-      best=i;near=along;
+
+  attack(origin: THREE.Vector3, direction: THREE.Vector3, range: number, damage: number, onKill?: (position: THREE.Vector3, kind: Kind) => void): boolean {
+    const dir = direction.clone().normalize();
+    let best = -1, near = range;
+    for (let i = 0; i < this.mobs.length; i++) {
+      const mob = this.mobs[i], center = mob.root.position.clone().add(new THREE.Vector3(0, mob.kind === 'crawler' ? .5 : mob.kind === 'cresthorn' ? 2.1 : 1, 0));
+      const delta = center.sub(origin), along = delta.dot(dir);
+      if (along < 0 || along > near) continue;
+      if (delta.addScaledVector(dir, -along).length() > .8) continue;
+      best = i; near = along;
     }
-    if(best<0)return false;
-    const mob=this.mobs[best];mob.hp-=damage;
+    if (best < 0) return false;
+    const mob = this.mobs[best];
+    mob.hp -= damage;
     // Flash the mob white for a beat so the hit reads.
-    mob.hitFlash=HIT_FLASH_TIME;
-    for(const mesh of mob.meshes) mesh.material=this.flashMaterials[mob.kind];
-    if(mob.hp<=0){
+    mob.hitFlash = HIT_FLASH_TIME;
+    for (const mesh of mob.meshes) mesh.material = this.flashMaterials[mob.kind];
+    if (mob.hp <= 0) {
       // Start the death animation instead of vanishing, and report the kill so
       // the caller can drop loot where the mob fell.
-      mob.dying=DEATH_TIME;
-      const flash=this.flashMaterials[mob.kind];
-      for(const mesh of mob.meshes) mesh.material=flash;
+      mob.dying = DEATH_TIME;
+      const flash = this.flashMaterials[mob.kind];
+      for (const mesh of mob.meshes) mesh.material = flash;
       onKill?.(mob.root.position.clone(), mob.kind);
     } else {
-      mob.root.position.addScaledVector(dir,.18);
+      mob.root.position.addScaledVector(dir, .18);
     }
     return true;
   }
+
   clear(): void {
     for (let i = this.mobs.length - 1; i >= 0; i--) this.remove(i);
     this.spawnTimer = 5;
@@ -403,6 +662,8 @@ export class Enemies {
     for (const mat of Object.values(this.flashMaterials)) mat.dispose();
     EYES_MATERIAL.dispose();
     CORE_MATERIAL.dispose();
+    AMBER_MATERIAL.dispose();
+    CREST_MATERIAL.dispose();
   }
 
   private remove(index: number): void {
