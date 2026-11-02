@@ -100,7 +100,7 @@ describe('save system', () => {
   const payload = {
     player: { x: 1, y: 2, z: 3, health: 80, sanity: 70, stamina: 60 },
     inventory: [{ id: Block.Crystal, count: 4 }],
-    progression: { weapon: true, beam: false, hasGravity: true, hasPlatform: false },
+    progression: { weapon: true, beam: false, hasGravity: true, hasPlatform: false, toolTier: 2, toolDurability: 40 },
   };
 
   it('round-trips a save through serialize/deserialize', () => {
@@ -117,6 +117,22 @@ describe('save system', () => {
     const raw = JSON.stringify({ ...payload, version: 99, savedAt: Date.now() });
     const outcome = deserialize(raw);
     expect(outcome.status).toBe('unsupported');
+  });
+
+  it('migrates a v1 save forward instead of discarding it', () => {
+    const v1 = {
+      player: { x: 1, y: 2, z: 3, health: 80, sanity: 70, stamina: 60 },
+      inventory: [{ id: Block.Crystal, count: 4 }],
+      progression: { weapon: true, beam: false, hasGravity: true, hasPlatform: false },
+    };
+    const outcome = deserialize(JSON.stringify({ ...v1, version: 1, savedAt: Date.now() }));
+    expect(outcome.status).toBe('loaded');
+    if (outcome.status === 'loaded') {
+      expect(outcome.data.progression.toolTier).toBe(0);
+      expect(outcome.data.progression.toolDurability).toBe(0);
+      // The original progression must survive the migration.
+      expect(outcome.data.progression.hasGravity).toBe(true);
+    }
   });
 
   it('rejects corrupt JSON without throwing', () => {

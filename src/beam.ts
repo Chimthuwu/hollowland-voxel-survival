@@ -1,27 +1,13 @@
 import * as THREE from 'three';
 import { Block, type World } from './world';
+import { beamDps, miningSpec } from './tools';
 
 /** Damage per second the beam deals to the targeted block. */
 const BEAM_DPS = 80;
 
-/** Per-block durability (HP). Higher = the beam holds it longer. */
-const DURABILITY: Partial<Record<Block, number>> = {
-  [Block.Dirt]:    15,
-  [Block.Wood]:    18,
-  [Block.Stone]:   60,
-  [Block.Mud]:     22,
-  [Block.Glitch]:  55,
-  [Block.Flesh]:   30,
-  [Block.Bone]:    50,
-  [Block.Torch]:   8,
-  [Block.Scaffold]:16,
-  [Block.Totem]:   50,
-  [Block.Scorched]:30,
-  [Block.Crystal]: 100,
-};
-
+/** Per-block durability comes from the shared mining table. */
 function durability(id: Block): number {
-  return DURABILITY[id] ?? 30;
+  return miningSpec(id).hardness;
 }
 
 interface BeamTarget {
@@ -77,7 +63,7 @@ export class BeamWeapon {
   }
 
   /** Update once per frame. Returns the block that was broken this tick (if any). */
-  update(dt: number, origin: THREE.Vector3, direction: THREE.Vector3, maxRange: number, onBreak: (id: Block, x: number, y: number, z: number) => void): Block | null {
+  update(dt: number, origin: THREE.Vector3, direction: THREE.Vector3, maxRange: number, onBreak: (id: Block, x: number, y: number, z: number) => void, toolTier = 0): Block | null {
     if (!this.mouseDown) return null;
 
     const hit = this.world.raycast(origin, direction, maxRange);
@@ -93,7 +79,7 @@ export class BeamWeapon {
 
     let broken: Block | null = null;
     if (this.target) {
-      this.target.health -= BEAM_DPS * dt;
+      this.target.health -= beamDps(toolTier) * dt;
       if (this.target.health <= 0) {
         broken = this.target.id;
         this.world.set(this.target.x, this.target.y, this.target.z, Block.Air);

@@ -65,4 +65,24 @@ button { font: inherit; }
 .setting-value { min-width: 42px; color: #b59a7c; font-size: 10px; text-align: right; }
 .setting-slider { flex: 0 0 180px; accent-color: #b59a7c; cursor: pointer; }
 .setting-checkbox { width: 18px; height: 18px; accent-color: #b59a7c; cursor: pointer; }
+
+/* --- Knapping minigame ---------------------------------------------------- */
+.knapping-overlay { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 50% 40%, #1b1a20f2 0%, #07080bfa 70%); }
+.knapping-panel { width: min(520px, 100%); padding: 30px 34px; border: 1px solid #b2a28b66; background: #141318f7; box-shadow: 0 18px 70px #000c; }
+.knapping-title { margin: 0 0 6px; font: 600 32px/1 'Cormorant Garamond', Georgia, serif; color: #ece5d8; }
+.knapping-subtitle { margin: 0 0 20px; color: #a69b8d; font-size: 10px; line-height: 1.8; }
+.knapping-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin: 0 0 18px; }
+.knapping-cell { aspect-ratio: 1; border: 1px solid #4a4740; background: transparent; padding: 0; cursor: pointer; transition: transform .12s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease; }
+.knapping-cell.solid { background: linear-gradient(150deg, #6d6a63, #4a4740); border-color: #8d8779; box-shadow: inset -4px -4px 0 #0005; }
+.knapping-cell.required { background: linear-gradient(150deg, #b39a72, #8a7350); border-color: #d9bd8e; box-shadow: inset -4px -4px 0 #0004, 0 0 10px #d9bd8e33; }
+.knapping-cell.required:hover { transform: translateY(-2px); }
+.knapping-cell.removed { background: #0d0d11; border-color: #2a2724; box-shadow: inset 0 2px 5px #000a; transform: scale(.88); }
+.knapping-cell.wrong { background: linear-gradient(150deg, #8d3a3a, #5d2323); border-color: #d16a5a; animation: knap-shake .28s ease; }
+@keyframes knap-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+.knapping-status { margin: 0 0 6px; min-height: 1.6em; color: #d8ccbc; font-size: 11px; }
+.knapping-score { margin: 0 0 16px; color: #b59a7c; font-size: 10px; letter-spacing: .1em; min-height: 1.4em; }
+.knapping-actions { display: flex; gap: 8px; margin-bottom: 16px; }
+.knapping-button { padding: 10px 20px; border: 1px solid #b2a28b55; background: #ffffff08; color: #ded4c4; font-size: 10px; letter-spacing: .12em; cursor: pointer; }
+.knapping-button:hover, .knapping-button:focus-visible { border-color: #d3b890; background: #cbb59318; }
+.knapping-hint { margin: 0; color: #8f857a; font-size: 9px; line-height: 1.9; }
 @media (max-width: 650px) { .hud-corner { top: 18px; left: 18px; } .world-info { top: 18px; right: 18px; } .biome { font-size: 22px; } .slot { width: 10vw; height: 52px; max-width: 51px; } .slot-icon { left: calc(50% - 10px); width: 20px; height: 20px; } .controls { gap: 12px 5px; } .control b, .control span { font-size: 8px; } .menu-panel { padding: 24px; } }

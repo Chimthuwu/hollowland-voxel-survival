@@ -12,7 +12,7 @@ import { Block } from './world';
  * into an incompatible world.
  */
 export const SAVE_KEY = 'hollowland_save_v1';
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 export interface SaveData {
   version: number;
@@ -24,8 +24,23 @@ export interface SaveData {
     beam: boolean;
     hasGravity: boolean;
     hasPlatform: boolean;
+    /** Best knapped tool tier, 0..3. */
+    toolTier: number;
+    /** Uses left on the current tool. */
+    toolDurability: number;
   };
 }
+
+/**
+ * Forward migrations, keyed by the version they upgrade FROM. A save is only
+ * discarded when no trivial migration exists for it.
+ */
+const MIGRATIONS: Record<number, (data: SaveData) => SaveData> = {
+  1: (data) => ({
+    ...data,
+    progression: { ...data.progression, toolTier: 0, toolDurability: 0 },
+  }),
+};
 
 export type SaveOutcome =
   | { status: 'saved'; data: SaveData }
@@ -63,12 +78,19 @@ export function deserialize(raw: string): SaveOutcome {
   if (!parsed || typeof parsed !== 'object') return { status: 'corrupt', reason: 'not an object' };
   const candidate = parsed as Partial<SaveData>;
   if (typeof candidate.version !== 'number') return { status: 'corrupt', reason: 'missing version' };
+  // A save from a newer build is ignored rather than misread.
   if (candidate.version > SAVE_VERSION) return { status: 'unsupported', version: candidate.version };
-  if (candidate.version < SAVE_VERSION) return { status: 'unsupported', version: candidate.version };
-  if (!candidate.player || typeof candidate.player.x !== 'number') return { status: 'corrupt', reason: 'missing player' };
-  if (!Array.isArray(candidate.inventory)) return { status: 'corrupt', reason: 'missing inventory' };
-  if (!candidate.progression) return { status: 'corrupt', reason: 'missing progression' };
-  return { status: 'loaded', data: candidate as SaveData };
+  // Older saves are migrated forward when the change is trivial.
+  let data = candidate as SaveData;
+  if (candidate.version < SAVE_VERSION) {
+    const migrate = MIGRATIONS[candidate.version];
+    if (!migrate) return { status: 'unsupported', version: candidate.version };
+    data = migrate(data);
+  }
+  if (!data.player || typeof data.player.x !== 'number') return { status: 'corrupt', reason: 'missing player' };
+  if (!Array.isArray(data.inventory)) return { status: 'corrupt', reason: 'missing inventory' };
+  if (!data.progression) return { status: 'corrupt', reason: 'missing progression' };
+  return { status: 'loaded', data };
 }
 
 /** Writes a save. Returns the outcome; never throws. */

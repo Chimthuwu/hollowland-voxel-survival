@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { appendFoliage, type FoliageBuffers } from './foliage';
 import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
 
-export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel }
+export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem }
 export type Biome = 'overcast' | 'storm' | 'glitch' | 'psychosis' | 'maw' | 'catacombs' | 'veins' | 'sky';
 
 /** The surface regions form strips along +X; negative X remains the spawn region. */
@@ -75,6 +75,11 @@ const colors: Record<number, number> = {
   [Block.Skyfruit]: 0x6fc4ff,
   [Block.Morsel]: 0xd88f7a,
   [Block.Chisel]: 0x9aa3b0,
+  [Block.PickHead]: 0x8c93a3,
+  [Block.CopperOre]: 0xb87333,
+  [Block.EchoGem]: 0xc7b3ff,
+  [Block.AxeHead]: 0x9a8f80,
+  [Block.BladeHead]: 0x9fb4c4,
 };
 // Each face is counter-clockwise as seen from outside the block.
 const faces = [
@@ -234,10 +239,19 @@ export class World {
       if (y < -48 && noise(x / 8 + y / 20, z / 8) > .62) return Block.Flesh;
       // Acid pools: rare bright-green pockets in the Abyssal Veins layer.
       if (y < -48 && noise3(x / 7 + 11, y / 5 + 3, z / 7 + 7) > .82) return Block.Acid;
-      // Crystal ore: scattered clusters in the deep stone layer (-8..-30), with brighter pockets.
-      if (y >= -30 && y <= -8) {
+      // Ore tiers by depth: copper is shallow and common, crystal sits in the
+      // middle stone layer, echo gems are rare and only in the deep veins.
+      if (y >= -32 && y <= -14) {
         const ore = noise3(x / 9, y / 9, z / 9);
         if (ore > .78) return Block.Crystal;
+      }
+      if (y >= -14 && y <= -3) {
+        const ore = noise3(x / 7 + 31, y / 6 + 17, z / 7 + 5);
+        if (ore > .74) return Block.CopperOre;
+      }
+      if (y <= -32 && y >= -52) {
+        const ore = noise3(x / 11 + 5, y / 9 + 23, z / 11 + 13);
+        if (ore > .80) return Block.EchoGem;
       }
       return y < -24 && noise(x / 13, z / 13 + y / 17) > .66 ? Block.Bone : Block.Stone;
     }

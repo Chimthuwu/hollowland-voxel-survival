@@ -5,15 +5,18 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { Block, biomeAt, type Biome, World } from './world';
 import { Enemies } from './entities';
 import { AudioEngine } from './audio';
-import { Inventory, UI } from './ui';
+import { Inventory, UI, headBlockFor } from './ui';
 import { Player } from './player';
 import { Avatar } from './avatar';
 import { nearbyLight } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
+import { canBreak, effectiveTier, meleeDamage } from './tools';
 import { BeamWeapon } from './beam';
 import { PowerUps, REDUCED_GRAVITY, trySpawnPlatform } from './powerups';
 import { Critters } from './critters';
 import { Chisel } from './chisel';
+import { KnappingMinigame } from './knapping';
+import type { KnapTool } from './knappingCore';
 import { BiomeHooks, HOOKS } from './biomeHooks';
 import { loadSettings, saveReduceIntensity, saveVolume } from './settings';
 import { clearSave, deserializeInventory, readSave, serializeInventory, writeSave } from './save';
@@ -47,12 +50,29 @@ const hooks = new BiomeHooks(world);
 const inventory = new Inventory();
 let menuOpen = false, started = false, dead = false, deathTimer = 0;
 const settings = loadSettings();
+// The knapping minigame lives in its own overlay host so it can sit above the
+// HUD without fighting the inventory panels for space.
+const knappingHost = document.createElement('div');
+knappingHost.id = 'knapping-host';
+document.body.appendChild(knappingHost);
+const knapping = new KnappingMinigame(knappingHost, {
+  onComplete: result => {
+    const head = headBlockFor(result.tool);
+    const added = inventory.add(head, 1);
+    inventory.recordToolTier(result.quality);
+    ui.toast(added
+      ? `${result.headName.toUpperCase()} · ${result.quality.toUpperCase()}`
+      : `YOUR PACK IS FULL — THE ${result.quality.toUpperCase()} ${result.tool.toUpperCase()} HEAD IS LOST`);
+    audio.event('break');
+  },
+  onCancel: () => { ui.toast('The stone is left rough.'); },
+});
 const ui = new UI(inventory, open => { menuOpen = open; if (open && document.pointerLockElement) document.exitPointerLock(); }, {
   volume: settings.volume,
   reduceIntensity: settings.reduceIntensity,
   onVolume: value => { const v = saveVolume(value); settings.volume = v; audio.setVolume(v); return v; },
   onReduceIntensity: value => { settings.reduceIntensity = saveReduceIntensity(value); },
-});
+}, (tool: KnapTool) => { knapping.open(tool); });
 const player = new Player(0.5,world.surface(0,0)+1.01,0.5);
 const avatar = new Avatar(scene);
 const spawn = player.position.clone();
@@ -116,8 +136,18 @@ renderer.domElement.addEventListener('mousedown',e=>{
       }
       return;
     }
-    if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,inventory.weapon?24:12)){audio.event('hit');return;}
-    if(hit){ if(inventory.add(hit.id)){world.set(hit.x,hit.y,hit.z,Block.Air);chisel.clear(hit.x,hit.y,hit.z);audio.event('break');} }
+    if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,meleeDamage(effectiveTier(inventory.toolTier,inventory.beam),inventory.weapon?24:12))){audio.event('hit');return;}
+    if(hit){
+      // Tier gate: a block that needs a better tool than the player owns is
+      // simply refused, with a reason on the HUD.
+      const tier=effectiveTier(inventory.toolTier,inventory.beam);
+      const gate=canBreak(hit.id,tier);
+      if(!gate.ok){ui.toast(gate.reason);return;}
+      if(inventory.add(hit.id)){
+        world.set(hit.x,hit.y,hit.z,Block.Air);chisel.clear(hit.x,hit.y,hit.z);audio.event('break');
+        if(tier>0&&!inventory.beam){if(inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');}
+      }
+    }
   } else if(e.button===2){
     // Platform-seed power-up: right-click drops a scaffold underfoot if the cell is air.
     if(powerups.hasPlatform && trySpawnPlatform(world,player.position.x,player.position.y,player.position.z)){
@@ -190,11 +220,11 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
     } else {highlight.visible=false;cellOutline.visible=false;}
     ui.tick(dt);
     camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));camera.position.add(back);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
-    if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id)=>{inventory.add(id);audio.event('break');});}
+    if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id)=>{inventory.add(id);audio.event('break');if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier);}
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
     post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'&&!settings.reduceIntensity?1:0;post.uniforms.uPsy.value=activeBiome==='psychosis'&&!settings.reduceIntensity?1:0;
-    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const hookLabel=HOOKS[activeBiome].label;const info=powerStr+(hookMessage||hookLabel);
+    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const toolStr=inventory.toolTier>0?`TOOL T${inventory.toolTier}${inventory.toolDurability>0?' ('+inventory.toolDurability+')':''} · `:'';const hookLabel=HOOKS[activeBiome].label;const info=powerStr+toolStr+(hookMessage||hookLabel);
     ui.update(health,sanity,stamina,activeBiome,info);
     overlay.recordFrame(dt);
     overlay.render(time,{x:p.x,y:p.y,z:p.z,vy:player.verticalVelocity,biome:activeBiome,health,sanity,stamina,gravity,impact:lastImpact});
@@ -211,7 +241,7 @@ function captureSave() {
   return {
     player: { x: player.position.x, y: player.position.y, z: player.position.z, health, sanity, stamina },
     inventory: serializeInventory(inventory.slots),
-    progression: { weapon: inventory.weapon, beam: inventory.beam, hasGravity: powerups.hasGravity, hasPlatform: powerups.hasPlatform },
+    progression: { weapon: inventory.weapon, beam: inventory.beam, hasGravity: powerups.hasGravity, hasPlatform: powerups.hasPlatform, toolTier: inventory.toolTier, toolDurability: inventory.toolDurability },
   };
 }
 function applySave(data: ReturnType<typeof captureSave>): void {
@@ -225,6 +255,8 @@ function applySave(data: ReturnType<typeof captureSave>): void {
   inventory.beam = data.progression.beam;
   powerups.hasGravity = data.progression.hasGravity;
   powerups.hasPlatform = data.progression.hasPlatform;
+  inventory.toolTier = data.progression.toolTier ?? 0;
+  inventory.toolDurability = data.progression.toolDurability ?? 0;
 }
 function doSave(): void {
   const outcome = writeSave(captureSave());
@@ -250,4 +282,4 @@ window.addEventListener('keydown', e => {
   }
 }
 // Development-only inspection hooks for repeatable browser acceptance tests.
-if(import.meta.env.DEV) (window as unknown as {__hollowland:unknown}).__hollowland={player,world,inventory,enemies,critters,damage,scene,ui,overlay,beam,powerups,hooks,get state(){return {health,sanity,stamina,activeBiome,gravity,dead,started,menuOpen,lastImpact,hookMessage};},save:doSave,load:doLoad};
+if(import.meta.env.DEV) (window as unknown as {__hollowland:unknown}).__hollowland={player,world,inventory,enemies,critters,chisel,damage,scene,ui,overlay,beam,powerups,hooks,get state(){return {health,sanity,stamina,activeBiome,gravity,dead,started,menuOpen,lastImpact,hookMessage};},save:doSave,load:doLoad};

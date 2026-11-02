@@ -5,7 +5,7 @@ Psychedelic 3D Terraria-like: colorful pixel-arcade beauty, cute at times, deepl
 
 ## Next priorities
 - [ ] Finish the art pivot: recolor storm/glitch/psychosis/maw palettes; fruits that drop as pickups; enemy hit flash / death animations / gore / drops; pixel-arcade HUD + item icons.
-- [ ] Progression core (top priority): ore tiers by depth/biome, tool tiers (pick + blade per material, speed/damage scaling), tool durability, gate bare-hand insta-mining, flavorful item names (borrow Euclydia's registry or new — low priority either way).
+- [x] Progression core: ore tiers by depth (copper -14..-3, crystal -32..-14, echo gem -52..-32), tool tiers driven by knapping quality (rough=1, good=2, fine=3), bare-hand insta-mining gated to soft blocks, tool durability that drops a tier when it runs out, melee damage and beam DPS scaled by tier, tool tier + durability persisted in the save schema (v1 saves migrate forward). Done 2026-11-02.
 - [ ] Multiplayer: port the SkyJump3D `ws` relay (rooms, ≤6 players); sync player state + world edits only (world is deterministic from noise); host-authoritative enemies.
 - [ ] Investigate the reported death while digging underground. The debug overlay (F3) records damage source/height/biome for every hit — diagnose the next occurrence. No cause confirmed yet.
 

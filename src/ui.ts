@@ -1,6 +1,10 @@
 import { Block, type Biome } from './world';
+import type { KnapTool } from './knappingCore';
+import { TIER_DURABILITY } from './tools';
 
-export type Recipe = 'torch' | 'weapon' | 'scaffold' | 'totem' | 'beam' | 'chisel';
+export type Recipe =
+  | 'torch' | 'weapon' | 'scaffold' | 'totem' | 'beam' | 'chisel'
+  | 'knapPick' | 'knapAxe' | 'knapBlade';
 export type InventorySlot = { id: Block; count: number };
 
 // Ingredient amounts are kept here so they can be tuned without changing the UI.
@@ -11,7 +15,20 @@ export const RECIPES: Record<Recipe, { name: string; description: string }> = {
   totem: { name: 'Warding totem', description: '3 stone + 2 glitch / flesh' },
   beam: { name: 'Beam weapon', description: '5 crystal — a continuous mining tool' },
   chisel: { name: 'Chisel', description: '3 stone + 2 wood — carve detail into blocks' },
+  knapPick: { name: 'Knapped pick head', description: '2 stone + 1 wood — chip it well for a fine edge' },
+  knapAxe: { name: 'Knapped axe head', description: '2 stone + 1 wood — chip it well for a fine edge' },
+  knapBlade: { name: 'Knapped blade head', description: '2 stone + 1 wood — chip it well for a fine edge' },
 };
+
+/** The knapping recipes, and the tool head each one produces. */
+export const KNAPPING_RECIPES: Partial<Record<Recipe, KnapTool>> = {
+  knapPick: 'pick', knapAxe: 'axe', knapBlade: 'blade',
+};
+
+/** Tool head block for a knapped tool. */
+export function headBlockFor(tool: KnapTool): Block {
+  return tool === 'pick' ? Block.PickHead : tool === 'axe' ? Block.AxeHead : Block.BladeHead;
+}
 
 const NAMES: Record<number, string> = {
   [Block.Air]: 'Air', [Block.Dirt]: 'Dirt', [Block.Stone]: 'Stone',
@@ -22,6 +39,8 @@ const NAMES: Record<number, string> = {
   [Block.PlatformSeed]: 'Platform seed', [Block.Acid]: 'Acid',
   [Block.Grass]: 'Grass', [Block.Skyfruit]: 'Skyfruit', [Block.Morsel]: 'Raw morsel',
   [Block.Chisel]: 'Chisel',
+  [Block.PickHead]: 'Pick head', [Block.AxeHead]: 'Axe head', [Block.BladeHead]: 'Blade head',
+  [Block.CopperOre]: 'Copper ore', [Block.EchoGem]: 'Echo gem',
 };
 
 export class Inventory {
@@ -29,6 +48,21 @@ export class Inventory {
   selected = 0;
   weapon = false;
   beam = false;
+  /**
+   * Best knapping quality achieved, 0 = none, 1 = rough, 2 = good, 3 = fine.
+   * Recorded now so the tier survives; the tiered-tools milestone gives it
+   * its mining/damage effect.
+   */
+  toolTier = 0;
+
+  /** Raises the recorded tool tier when a head is knapped better. */
+  recordToolTier(quality: 'fine' | 'good' | 'rough' | 'broken'): void {
+    const tier = quality === 'fine' ? 3 : quality === 'good' ? 2 : quality === 'rough' ? 1 : 0;
+    if (tier > this.toolTier) {
+      this.toolTier = tier;
+      this.toolDurability = TIER_DURABILITY[tier] ?? 0;
+    }
+  }
 
   add(id: Block, count = 1): boolean {
     if (id === Block.Air || !Number.isInteger(count) || count <= 0) return false;
@@ -37,6 +71,30 @@ export class Inventory {
     if (this.slots.length >= 9) return false;
     this.slots.push({ id, count });
     return true;
+  }
+
+  /**
+   * Uses left on the current tool. Mining with a tool wears it; when it runs
+   * out the tier drops one step (a worn tool is a rougher tool).
+   */
+  toolDurability = 0;
+
+  /** Wears the current tool. Returns 'broken' when the tier drops. */
+  wearTool(amount = 1): 'worn' | 'broken' | 'none' {
+    if (this.toolTier <= 0) return 'none';
+    if (this.toolDurability <= 0) this.toolDurability = TIER_DURABILITY[this.toolTier] ?? 60;
+    this.toolDurability -= amount;
+    if (this.toolDurability <= 0) {
+      this.toolTier = Math.max(0, this.toolTier - 1);
+      this.toolDurability = this.toolTier > 0 ? (TIER_DURABILITY[this.toolTier] ?? 60) : 0;
+      return 'broken';
+    }
+    return 'worn';
+  }
+
+  /** Refreshes the durability pool when a better tool is knapped. */
+  syncToolDurability(): void {
+    if (this.toolDurability <= 0) this.toolDurability = TIER_DURABILITY[this.toolTier] ?? 0;
   }
 
   remove(id: Block, count = 1): boolean {
@@ -91,6 +149,13 @@ export class Inventory {
           && trial.remove(Block.Stone, 3) && trial.remove(Block.Wood, 2)
           && trial.add(Block.Chisel, 1);
         break;
+      case 'knapPick':
+      case 'knapAxe':
+      case 'knapBlade':
+        // The stone and the haft are consumed now; the head itself is granted
+        // once the minigame finishes, so the player does not pay for a failure.
+        success = trial.remove(Block.Stone, 2) && trial.remove(Block.Wood, 1);
+        break;
     }
     if (!success) return false;
     this.slots = trial.slots;
@@ -137,6 +202,8 @@ export class UI {
       onVolume: (value: number) => number;
       onReduceIntensity: (value: boolean) => void;
     },
+    /** Called when the player picks a knapping recipe; the game opens the minigame. */
+    private readonly onKnapping?: (tool: KnapTool) => void,
   ) {
     this.root = node('div', 'hollow-ui');
     const hud = node('div', 'hud');
@@ -179,6 +246,20 @@ export class UI {
       button.type = 'button';
       button.append(node('strong', '', RECIPES[recipe].name), node('span', '', RECIPES[recipe].description));
       button.addEventListener('click', () => {
+        const kappingTool = KNAPPING_RECIPES[recipe];
+        if (kappingTool && this.onKnapping) {
+          // Knapping needs the minigame: consume the materials, then hand
+          // control to the player so they actually chip the stone.
+          const crafted = this.inventory.craft(recipe);
+          this.refresh();
+          if (!crafted) {
+            this.craftFeedback.textContent = 'Not enough materials for that.';
+            return;
+          }
+          this.craftFeedback.textContent = 'Chip away at the stone.';
+          this.onKnapping(kappingTool);
+          return;
+        }
         const crafted = this.inventory.craft(recipe);
         this.refresh();
         this.craftFeedback.textContent = crafted ? `${RECIPES[recipe].name} crafted.` : 'Not enough materials, inventory full, or already crafted.';
