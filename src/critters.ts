@@ -122,6 +122,9 @@ function buildMoth(): Built {
   for (const sx of [-1, 1]) {
     const fore = new THREE.Group();
     fore.position.set(sx * .08, 1.45, .04);
+    // Sweep both wing pairs back toward the tail: straight-out rectangles
+    // read as a two-way bowtie, swept blades read as an insect with a nose.
+    fore.rotation.y = sx * -.5;
     fore.userData.side = sx;
     fore.userData.hind = 0;
     const foreMesh = new THREE.Mesh(new THREE.PlaneGeometry(.72, .42), wingMat);
@@ -131,6 +134,8 @@ function buildMoth(): Built {
     wings.push(fore);
     const hind = new THREE.Group();
     hind.position.set(sx * .08, 1.42, .14);
+    // Hind wings trail even further back than the forewings.
+    hind.rotation.y = sx * -.85;
     hind.userData.side = sx;
     hind.userData.hind = 1;
     const hindMesh = new THREE.Mesh(new THREE.PlaneGeometry(.46, .32), wingMat);
@@ -172,7 +177,9 @@ function buildDragonfly(): Built {
   for (const sx of [-1, 1]) for (let pair = 0; pair < 2; pair++) {
     const w = new THREE.Group();
     w.position.set(sx * .09, 1.72, pair === 0 ? -.1 : .08);
-    w.rotation.y = sx * -.12;
+    // Sweep all four blades back so the planform shows one forward axis
+    // instead of a symmetric cross that can seem to face both directions.
+    w.rotation.y = sx * (pair === 0 ? -.42 : -.58);
     w.userData.side = sx;
     w.userData.hind = pair;
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(pair === 0 ? .82 : .68, pair === 0 ? .15 : .12), wingMat);
