@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { appendUndergrowth, type FoliageBuffers } from './foliage';
+import { appendUndergrowth, floraPickAt, type FloraPick, type FoliageBuffers } from './foliage';
 import * as forest from './forest';
 import type { TreeShape, TreeCell } from './forest';
 import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
@@ -475,8 +475,18 @@ export class World {
     // Append trees into the same chunk geometry so we pay one extra draw call per chunk, not per tree.
     // Append ground flora (no trees — those are voxel data now) into the same
     // chunk geometry so we pay one extra draw call per chunk, not per bush.
+    // Decoration anchors to the EDIT-AWARE top solid cell, so plants settle
+    // with the ground the player digs instead of hovering over pits; gathered
+    // flora columns are skipped entirely.
     const foliageBuffers: FoliageBuffers = { positions, normals, tint, effects, foliage, indices };
-    appendUndergrowth(foliageBuffers, cx, cy, cz, (x, z) => this.surface(x, z), biomeAt);
+    const anchor = new Map<string, number>();
+    const groundOf = (x: number, z: number): number => {
+      const k = `${x},${z}`;
+      let g = anchor.get(k);
+      if (g === undefined) { g = this.topGround(x, z); anchor.set(k, g); }
+      return g;
+    };
+    appendUndergrowth(foliageBuffers, cx, cy, cz, groundOf, biomeAt, (x, z) => this.foraged.has(`flora,${x},${z}`));
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
@@ -541,6 +551,55 @@ export class World {
       else { z += sz; distance = tz; tz += dz; }
     }
     return null;
+  }
+
+  /** Columns whose flora the player already gathered: splice out decoration
+   *  without touching the block data the flora stands on. */
+  private foraged = new Set<string>();
+
+  /**
+   * The topmost solid ground cell of a column, honoring player edits —
+   * unlike surface(), which is pure generation noise and keeps flora floating
+   * over dug-out pits. Tree bodies (voxel trunks/canopies) and placed utility
+   * blocks are skipped, so plants always moor to actual terrain.
+   */
+  topGround(x: number, z: number): number {
+    x = Math.floor(x); z = Math.floor(z);
+    const base = this.surface(x, z);
+    for (let y = base + 20; y >= 0; y--) {
+      const id = this.get(x, y, z);
+      if (id === Block.Air) continue;
+      if (y > base) {
+        // A tree cell: voxel canopy, trunks or accents growing above terrain.
+        if (id === Block.Leaf || id === Block.Skyfruit) continue;
+        if ((id === Block.Wood || id === Block.Glitch || id === Block.Bone || id === Block.Flesh) && this.treeAtVoxel(x, y, z) !== null) continue;
+        // Player-placed utilities never carry ground flora.
+        if (id === Block.Torch || id === Block.Totem || id === Block.Scaffold || id === Block.GravityCharm || id === Block.PlatformSeed) continue;
+      }
+      return y;
+    }
+    return base;
+  }
+
+  /**
+   * Player harvest: reports the forageable flora on a column, records it as
+   * gathered so the render pass stops drawing it, and rebuilds the affected
+   * chunk geometry. Returns null when nothing is there or it was already
+   * gathered (no double-harvest).
+   */
+  forageFlora(x: number, z: number): { kind: FloraPick; y: number } | null {
+    const tx = Math.floor(x), tz = Math.floor(z);
+    if (this.foraged.has(`flora,${tx},${tz}`)) return null;
+    const gy = this.topGround(tx, tz);
+    const kind = floraPickAt(tx, tz, biomeAt(tx, gy, tz));
+    if (!kind) return null;
+    this.foraged.add(`flora,${tx},${tz}`);
+    // The flora lives in the y-chunk holding its base cell; logs and tilted
+    // shroom caps spill sideways, so refresh the 3x3 chunk neighbourhood.
+    const cy = Math.floor((gy + 1) / SIZE), cx = Math.floor(tx / SIZE), cz = Math.floor(tz / SIZE);
+    for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++)
+      if (this.chunks.has(key(cx + ox, cy, cz + oz))) this.buildChunk(cx + ox, cy, cz + oz);
+    return { kind, y: gy + 1 };
   }
 
   dispose(): void {

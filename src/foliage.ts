@@ -43,6 +43,35 @@ export interface FoliageBuffers {
   indices: number[];
 }
 
+/** Flora kinds a column can carry; all of them are forageable by clicking. */
+export type FloraPick = 'shroom' | 'grass' | 'flower' | 'fern' | 'branch' | 'log';
+
+/**
+ * What harvestable flora lives on this exact column, using the same seeded
+ * decisions as the render pass below. Must stay in sync with the emitter's
+ * branch order — it decides what picking up a plant yields.
+ */
+export function floraPickAt(x: number, z: number, biome: Biome): FloraPick | null {
+  const r = hash(x * 1.61, z * 2.09);
+  const r2 = hash(x * 3.71 + 41, z * 4.93 - 17);
+  // Rare mushroom clusters: one patch core in each 5x5 group.
+  const clusterCol = Math.floor(x / 5), clusterRow = Math.floor(z / 5);
+  if (hash(clusterCol * 4.31, clusterRow * 7.9) < .32) {
+    const jx = clusterCol * 5 + Math.floor(hash(clusterCol * 3.7, clusterRow * 1.3) * 5);
+    const jz = clusterRow * 5 + Math.floor(hash(clusterCol * 8.3, clusterRow * 5.9) * 5);
+    if (Math.abs(x - jx) + Math.abs(z - jz) <= 1 && r < .5) return 'shroom';
+  }
+  if ((biome === 'overcast' && r < .014) || (biome === 'psychosis' && r < .01)) return 'fern';
+  if (r > .987 && r2 > .35) return null; // rocks
+  if (r > .9835) return 'branch';
+  if (r < .0022) return 'log';
+  if (biome === 'overcast' || biome === 'storm' || biome === 'glitch') {
+    if (r > .945) return 'grass';
+    if (r > .935) return 'flower';
+  }
+  return null;
+}
+
 /** Emits an arbitrarily sized box; vertices nudged 1e-3 along normals so decorations never Z-fight voxel faces. */
 function addBox(out: FoliageBuffers, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, r: number, g: number, b: number, effect: number, foliage = 0): void {
   const o = 1e-3;
@@ -107,13 +136,15 @@ function emitShroom(out: FoliageBuffers, x: number, baseY: number, z: number, va
 /**
  * Appends forest-floor decoration into a chunk's geometry buffers. Reads
  * surface and biome via callbacks so this module stays decoupled from World.
- * Cheap no-op for chunks that don't overlap the surface band.
+ * `skip` reports columns whose flora a player already gathered. Cheap no-op
+ * for chunks that don't overlap the surface band.
  */
 export function appendUndergrowth(
   out: FoliageBuffers,
   cx: number, cy: number, cz: number,
   surface: (x: number, z: number) => number,
   biomeOf: (x: number, y: number, z: number) => Biome,
+  skip?: (x: number, z: number) => boolean,
 ): void {
   // Surface lives around y=4..11; only chunks intersecting that band carry flora.
   if (cy * CHUNK_SIZE > 24 || (cy + 1) * CHUNK_SIZE < 4) return;
@@ -122,6 +153,7 @@ export function appendUndergrowth(
   for (let lx = 0; lx < CHUNK_SIZE; lx++) {
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       const x = x0 + lx, z = z0 + lz;
+      if (skip?.(x, z)) continue;
       const height = surface(x, z);
       const baseY = height + 1;
       // Only the chunk containing the floor emits the decoration.

@@ -165,6 +165,19 @@ renderer.domElement.addEventListener('mousedown',e=>{
       for(let i=0;i<count;i++) loot.spawn(Block.Morsel,pos.clone().setY(pos.y+.4),1);
     })){audio.event('hit');return;}
     if(hit){
+      // Forage first: clicking the ground a plant grows from gathers the
+      // plant (one drop per column, no double-harvest), taking priority over
+      // mining that block entirely.
+      const flora=world.forageFlora(hit.x,hit.z);
+      if(flora){
+        const DROP: Record<string,[Block,number]> = { shroom:[Block.Morsel,1], grass:[Block.Grass,1], flower:[Block.Grass,1], fern:[Block.Grass,1], branch:[Block.Wood,1], log:[Block.Wood,3] };
+        const LABEL: Record<string,string> = { shroom:'MUSHROOM', grass:'GRASS TUFT', flower:'WILDFLOWER', fern:'FERN', branch:'FALLEN BRANCH', log:'FALLEN LOG' };
+        const [id,count]=DROP[flora.kind];
+        for(let i=0;i<count;i++) loot.spawn(id,new THREE.Vector3(hit.x+.5,flora.y+1.2,hit.z+.5),1);
+        ui.toast(`GATHERED · ${LABEL[flora.kind]}`);
+        audio.event('break');
+        return;
+      }
       // Tier gate: a block that needs a better tool than the player owns is
       // simply refused, with a reason on the HUD.
       const tier=effectiveTier(inventory.toolTier,inventory.beam);
