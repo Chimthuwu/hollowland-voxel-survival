@@ -63,6 +63,10 @@ function startPhantom(): void {
   phantom.visible = true;
 }
 const world = new World(scene);
+// Debug handle: expose the scene/world and an error log for remote inspection.
+(window as any).__dbg = { scene, world, errs: [] as string[] };
+window.addEventListener('error', e => (window as any).__dbg.errs.push('ERR ' + e.message));
+window.addEventListener('unhandledrejection', e => (window as any).__dbg.errs.push('REJ ' + e.reason));
 const enemies = new Enemies(scene,world);
 const critters = new Critters(scene,world);
 const chisel = new Chisel(world);
@@ -81,6 +85,9 @@ const timber = new Timber(scene, world, (id, pos) => loot.spawn(id, pos, 1), () 
   shakeTimer = .5;
 });
 const inventory = new Inventory();
+// The player spawns with the beam laser gun so they can mine, place and
+// fight right away instead of gating it behind deep crystal ore.
+inventory.beam = true;
 let menuOpen = false, started = false, dead = false, deathTimer = 0;
 const settings = loadSettings();
 // The knapping minigame lives in its own overlay host so it can sit above the
@@ -247,6 +254,25 @@ renderer.domElement.addEventListener('mousedown',e=>{
       } else {
         mineTarget = { x: hit.x, y: hit.y, z: hit.z, id: hit.id, health: spec.hardness };
         mineDamage = 0;
+        // Punching a trunk shakes skyfruit loose from the canopy — fruit falls
+        // the very first hit, before the tree is felled.
+        if(isTrunk){
+          const tree = world.treeAtVoxel(hit.x, hit.y, hit.z);
+          if(tree){
+            const base = new THREE.Vector3(tree.shape.tx + .5, tree.shape.baseY, tree.shape.tz + .5);
+            const drops = 3 + Math.floor(Math.random() * 3);
+            for(let i = 0; i < drops; i++){
+              const a = Math.random() * Math.PI * 2;
+              const r = 1 + Math.random() * 3;
+              loot.spawn(Block.Skyfruit, new THREE.Vector3(
+                base.x + Math.cos(a) * r,
+                base.y + 2 + Math.random() * 3,
+                base.z + Math.sin(a) * r
+              ), 1);
+            }
+            audio.event('break');
+          }
+        }
       }
     }
   } else if(e.button===2){

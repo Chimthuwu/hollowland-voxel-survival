@@ -65,9 +65,10 @@ export function makeTree(tx: number, tz: number, baseY: number, biome: Biome): T
   const h2 = hash(tx * 5.29, tz * 6.11);
   const [lo, hi] = HEIGHTS[biome];
   const height = lo + Math.floor(h0 * (hi - lo + 1));
-  // Substantial trunks: every species has a 3–5 cell base disc, tapered upward.
-  const rBase = biome === 'maw' ? 1.35 : biome === 'storm' ? 1.25 : 1.15;
-  const rTop = rBase * .55;
+  // Substantial trunks: thick enough to read as wood trunks, tapered upward,
+  // but not so wide they look like chunky pillars.
+  const rBase = biome === 'maw' ? 1.7 : biome === 'storm' ? 1.6 : 1.5;
+  const rTop = rBase * .5;
   return {
     tx, tz, baseY, biome, height,
     rBase, rTop,
@@ -99,13 +100,12 @@ function trunkRadiusAt(tree: TreeShape, ly: number, dy: number, dz: number): num
   let r = tree.rBase + (tree.rTop - tree.rBase) * t;
   // Root flare: buttressed skirt spreading out over the first three rows.
   if (ly <= 2) {
-    const skirt = ly === 0 ? 1 : ly === 1 ? .62 : .32;
-    r += (0.7 + hash(tree.tx * 2.1 + dy, tree.tz * 1.9 + dz) * .4) * skirt;
+    const skirt = ly === 0 ? 1.4 : ly === 1 ? .9 : .5;
+    r += (0.9 + hash(tree.tx * 2.1 + dy, tree.tz * 1.9 + dz) * .5) * skirt;
   } else {
-    // Bark grooves: four rotating ribs around the girth so the trunk reads
-    // as ridged wood, not a smooth round blob. The phase drifts with height
-    // so the ridges spiral gently up the trunk.
-    r += Math.sin(Math.atan2(dz, dy) * 4 + tree.leanSeed * 11 + ly * .5) * .14;
+    // Bark grooves: rotating ribs around the girth so the trunk reads
+    // as ridged bark, not a smooth round blob.
+    r += Math.sin(Math.atan2(dz, dy) * 4 + tree.leanSeed * 11 + ly * .5) * .18;
   }
   return r;
 }
@@ -146,9 +146,10 @@ function canopyInfo(tree: TreeShape, x: number, y: number, z: number, dxRaw: num
       if ((dx === bx && dz === bz) || (reach === 2 && dx === bx * 2 && dz === bz * 2)) return { kind: 'branch', accent: false };
     }
     if (ly < y0 || ly > tree.height + 1) {
-      // Dangling skyfruit: two rows of clustered fruit just under the lowest
-      // canopy ring, dense enough to be unmistakably present, not speckle.
-      if ((ly === y0 - 1 || ly === y0 - 2) && edge < .2 && Math.abs(dx) <= 2 && Math.abs(dz) <= 2) return { kind: 'fruit', accent: false };
+      // Dangling skyfruit: several rows of clustered fruit just under the
+      // lowest canopy ring, abundant enough to be unmistakable, not speckle.
+      if ((ly === y0 - 1 || ly === y0 - 2 || ly === y0 - 3)
+        && edge < .5 && Math.abs(dx) <= 3 && Math.abs(dz) <= 3) return { kind: 'fruit', accent: false };
       return null;
     }
     const t = (ly - y0) / (tree.height + 1.2 - y0);
@@ -326,10 +327,10 @@ export function leafTint(tree: TreeShape, x: number, y: number, z: number, accen
  *  reads as layered wood instead of one flat grey. */
 export function trunkTint(tree: TreeShape, y: number): [number, number, number] {
   const c = TRUNK_COLORS[tree.biome];
-  // Stronger horizontal growth bands plus fine vertical grain, so bark reads
-  // as layered wood instead of flat colour.
-  const band = .85 + hash3(tree.tx, Math.floor(y / 2), tree.tz) * .3;
-  const grain = .95 + hash3(tree.tx + y * .31, y, tree.tz) * .1;
+  // Strong horizontal growth bands plus fine vertical grain, so bark reads
+  // as layered wood with visible texture instead of flat colour.
+  const band = .8 + hash3(tree.tx, Math.floor(y / 2), tree.tz) * .4;
+  const grain = .9 + hash3(tree.tx + y * .31, y, tree.tz) * .2;
   const j = band * grain;
   return [c[0] * j, c[1] * j, c[2] * j];
 }

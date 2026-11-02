@@ -3,6 +3,7 @@ import { appendUndergrowth, floraPickAt, type FloraPick, type FoliageBuffers } f
 import * as forest from './forest';
 import type { TreeShape, TreeCell } from './forest';
 import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
+import { buildAtlas, atlasUV } from './textures';
 
 export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem, Leaf, Chitin, Silk, Hide, Claw, Bandage, Sand, Snow, Water, CopperBar, CrystalBar, EchoBar }
 
@@ -168,6 +169,16 @@ const colors: Record<number, number> = {
   [Block.CopperBar]: 0xb87333, [Block.CrystalBar]: 0x6fe0d0, [Block.EchoBar]: 0xc7b3ff,
 };
 
+/** Texture atlas UV rect [u, v, width, height] for one face of a block.
+ *  Grass shows its leafy top on the upper face and dirt on every side. */
+function blockFaceUV(id: Block, normal: number[]): [number, number, number, number] | null {
+  if (id === Block.Grass) {
+    if (normal[1] === 1) return atlasUV(Block.Grass);
+    return atlasUV(Block.Dirt);
+  }
+  return atlasUV(id);
+}
+
 /** Water sits at or below this surface cell; river beds carve down under it. */
 export const WATER_LEVEL = 4;
 
@@ -227,15 +238,26 @@ export class World {
   private readonly seasonTint = { value: new THREE.Color(1, 1, 1) };
 
   constructor(private readonly scene: THREE.Scene) {
-    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
+    // Build the procedural texture atlas (canvas-based; safe in Node tests).
+    let atlas: THREE.Texture | null = null;
+    if (typeof document !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
+      atlas = buildAtlas();
+    }
+    this.material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 1,
+      flatShading: true,
+      map: atlas ?? undefined,
+    });
     const clock = this.clock;
     const seasonTint = this.seasonTint;
     this.material.onBeforeCompile = shader => {
       shader.uniforms.worldTime = clock;
       shader.uniforms.uSeasonTint = seasonTint;
-      shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float effect;\nattribute float foliage;\nuniform float worldTime;\nuniform vec3 uSeasonTint;');
+      shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float effect;\nattribute float foliage;\nvarying float vFoliage;\nuniform float worldTime;\nuniform vec3 uSeasonTint;');
       shader.vertexShader = shader.vertexShader.replace('#include <color_vertex>', `#include <color_vertex>
         vColor.rgb *= mix(vec3(1.0), uSeasonTint, foliage);
+        vFoliage = foliage;
       `);
       shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
         float pulse = sin(worldTime * 2.3 + position.x * .38 + position.y * .42 + position.z * .31) * .055;
@@ -249,8 +271,23 @@ export class World {
           transformed.z += sway * .6;
         }
       `);
+      // vFoliage must be declared at global scope — a varying inside main()
+      // is illegal GLSL and silently kills the whole terrain material.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        '#include <common>\nvarying float vFoliage;');
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        // Vintage Story-style surface detail noise: bark grain, stone speckle, leaf mottle.
+        float detail = fract(sin(dot(vMapUv, vec2(12.9898, 78.233))) * 43758.5453);
+        diffuseColor.rgb += (detail - 0.5) * 0.10 * (1.0 - vFoliage * 0.4);
+        if (vFoliage > 0.5) {
+          diffuseColor.rgb += vec3(0.06) * (fract(sin(dot(vMapUv, vec2(78.233, 12.9898))) * 43758.5453) - 0.5);
+        }`
+      );
     };
-    this.material.customProgramCacheKey = () => 'hollowland-voxel-effects-v2';
+    this.material.customProgramCacheKey = () => 'hollowland-voxel-effects-v3';
   }
 
   /**
@@ -640,7 +677,7 @@ export class World {
   }
 
   private buildChunk(cx: number, cy: number, cz: number): void {
-    const positions: number[] = [], normals: number[] = [], tint: number[] = [], effects: number[] = [], foliage: number[] = [], indices: number[] = [];
+    const positions: number[] = [], normals: number[] = [], tint: number[] = [], effects: number[] = [], foliage: number[] = [], indices: number[] = [], uvs: number[] = [];
     const color = new THREE.Color();
     // Solid-cell lookup used by the ambient occlusion pass.
     const solidAt = (x: number, y: number, z: number): boolean => this.get(x, y, z) !== Block.Air;
@@ -677,7 +714,10 @@ export class World {
         const micro: MicroBuffers = { positions, normals, tint, effects, indices };
         const verts = appendMicroGeometry(micro, x, y, z, profile, [color.r, color.g, color.b],
           (nx, ny, nz, ci, cj) => this.microColumnMask(nx, ny, nz, ci, cj));
-        for (let i = 0; i < verts; i++) foliage.push(0);
+        for (let i = 0; i < verts; i++) {
+          foliage.push(0);
+          uvs.push(0, 0); // carved micro-geometry uses vertex colour only
+        }
         continue;
       }
       // Per-voxel brightness variation gives the ground a dithered pixel-art
@@ -687,6 +727,11 @@ export class World {
         // Skip faces that are hidden behind a solid neighbour.
         if (solidAt(x + face.n[0], y + face.n[1], z + face.n[2])) continue;
         const base = positions.length / 3;
+        // Texture UVs for this face: grass shows grass on top, dirt on sides.
+        const tile = blockFaceUV(id, face.n);
+        const axes: number[] = [];
+        for (let a = 0; a < 3; a++) if (face.n[a] === 0) axes.push(a);
+        const [u0, v0, uw, vh] = tile ?? [0, 0, 0, 0];
         for (let vi = 0; vi < 4; vi++) {
           const v = face.v[vi];
           positions.push(x + v[0], y + v[1], z + v[2]);
@@ -696,6 +741,8 @@ export class World {
           tint.push(color.r * face.shade * vary * ao, color.g * face.shade * vary * ao, color.b * face.shade * vary * ao);
           effects.push(effect);
           foliage.push(foli);
+          // Map the two tangent axes of the face into atlas UV space.
+          uvs.push(u0 + v[axes[0]] * uw, v0 + v[axes[1]] * vh);
         }
         indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
       }
@@ -729,6 +776,7 @@ export class World {
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(tint, 3));
     geometry.setAttribute('effect', new THREE.Float32BufferAttribute(effects, 1));
     geometry.setAttribute('foliage', new THREE.Float32BufferAttribute(foliage, 1));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geometry.setIndex(indices);
     geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, this.material);
