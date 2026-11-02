@@ -56,6 +56,8 @@ export interface FoliageBuffers {
   normals: number[];
   tint: number[];
   effects: number[];
+  /** 1 for leaves/blossoms (sway + seasonal tint), 0 for trunks and ground. */
+  foliage?: number[];
   indices: number[];
 }
 
@@ -72,7 +74,7 @@ function jitterC(c: readonly [number, number, number], amt: number, sx: number, 
 }
 
 /** Emits an arbitrarily sized box; vertices are nudged 1e-3 along each face normal so decorations never Z-fight voxel faces. */
-function addBox(out: FoliageBuffers, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, r: number, g: number, b: number, effect: number): void {
+function addBox(out: FoliageBuffers, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, r: number, g: number, b: number, effect: number, foliage = 0): void {
   const o = 1e-3;
   for (const face of FACES) {
     const base = out.positions.length / 3;
@@ -81,6 +83,7 @@ function addBox(out: FoliageBuffers, cx: number, cy: number, cz: number, sx: num
       out.normals.push(face.n[0], face.n[1], face.n[2]);
       out.tint.push(r * face.shade, g * face.shade, b * face.shade);
       out.effects.push(effect);
+      out.foliage?.push(foliage);
     }
     out.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
@@ -107,7 +110,9 @@ function emitConifer(out: FoliageBuffers, x: number, baseY: number, z: number, a
     addBox(out, x + .5, baseY + i + .5, z + .5, w, 1.02, w, c[0], c[1], c[2], a.effect);
   }
   emitRootFlare(out, x, baseY, z, a, seedX, seedZ);
-  const layers = 4, start = Math.floor(h * .4);
+  // The canopy starts one block above the trunk base so the widest layer sits on
+  // the trunk. Starting it higher left a wide slab hovering over a thin stick.
+  const layers = 4, start = 1;
   for (let l = 0; l < layers; l++) {
     const frac = l / (layers - 1);
     const ly = baseY + start + l;
@@ -119,20 +124,23 @@ function emitConifer(out: FoliageBuffers, x: number, baseY: number, z: number, a
       if (hash(seedX + dx * 3 + l * 7, seedZ + dz * 5 - l * 11) > fill) continue;
       const palette = l === layers - 1 ? a.accentColor : a.canopyColor;
       const c = jitterC(palette, a.jitter, seedX + dx, seedZ + dz, l);
-      addBox(out, x + .5 + dx, ly + .5, z + .5 + dz, 1.05, 1, 1.05, c[0], c[1], c[2], a.effect);
+      addBox(out, x + .5 + dx, ly + .5, z + .5 + dz, 1.05, 1, 1.05, c[0], c[1], c[2], a.effect, 1);
     }
   }
   // Spire tip above the top layer.
   const tip = jitterC(a.accentColor, a.jitter, seedX, seedZ, 99);
-  addBox(out, x + .5, baseY + h + .2, z + .5, .35, 1.6, .35, tip[0], tip[1], tip[2], a.effect);
-  // Small fruits hang beneath the lower canopy edge (not every tree is laden).
+  addBox(out, x + .5, baseY + h + .2, z + .5, .35, 1.6, .35, tip[0], tip[1], tip[2], a.effect, 1);
+/** Small sky-blue (or coral) fruits hang beneath the lower canopy edge; most trees are laden, a few bare. */
   if (a.fruitColor) {
+    // Per-tree fruit variety: most trees carry sky-blue, some carry warm coral.
+    const gold = hash(seedX * 3.3, seedZ * 7.7) > .62;
+    const base = gold ? [.96, .62, .38] : a.fruitColor;
     for (let f = 0; f < 4; f++) {
       if (hash(seedX * 4.7 + f * 13, seedZ * 6.1 + f * 7) < .4) continue;
       const ang = hash(seedX + f * 3, seedZ * 5 + f * 11) * Math.PI * 2;
       const rr = 1.1 + hash(seedX * 2 + f, seedZ * 3 + f * 7) * 1.2;
       const fx = Math.round(Math.cos(ang) * rr), fz = Math.round(Math.sin(ang) * rr);
-      const c = jitterC(a.fruitColor, a.jitter, seedX + f, seedZ - f, 7);
+      const c = jitterC(base as [number, number, number], a.jitter, seedX + f, seedZ - f, 7);
       addBox(out, x + .5 + fx, baseY + start + .55, z + .5 + fz, .3, .3, .3, c[0], c[1], c[2], 0);
     }
   }
@@ -168,7 +176,7 @@ function emitWindswept(out: FoliageBuffers, x: number, baseY: number, z: number,
     if (hash(seedX + dx * 3, seedZ + dz * 5) > .62) continue;
     const drop = along >= 2 ? 1 : 0; // trailing edge droops a cell
     const c = jitterC(a.canopyColor, a.jitter, seedX + dx, seedZ + dz, 3);
-    addBox(out, tx + .5 + dx + wx * 1.5, topY + .5 - drop, tz + .5 + dz + wz * 1.5, 1.05, 1, 1.05, c[0], c[1], c[2], a.effect);
+    addBox(out, tx + .5 + dx + wx * 1.5, topY + .5 - drop, tz + .5 + dz + wz * 1.5, 1.05, 1, 1.05, c[0], c[1], c[2], a.effect, 1);
   }
 }
 
@@ -189,7 +197,7 @@ function emitCorrupted(out: FoliageBuffers, x: number, baseY: number, z: number,
       if (Math.abs(dx) !== r && Math.abs(dz) !== r) continue;
       if (hash(seedX * 2 + dx, seedZ * 2 + dz + l) > .8) continue;
       const c = jitterC(a.canopyColor, a.jitter, seedX + dx, seedZ + dz, l);
-      addBox(out, x + .5 + dx, top + l + .5, z + .5 + dz, 1.03, 1, 1.03, c[0], c[1], c[2], a.effect);
+      addBox(out, x + .5 + dx, top + l + .5, z + .5 + dz, 1.03, 1, 1.03, c[0], c[1], c[2], a.effect, 1);
     }
   }
   // Detached cubes hovering around the crown.
@@ -199,7 +207,7 @@ function emitCorrupted(out: FoliageBuffers, x: number, baseY: number, z: number,
     const fz = Math.round((hash(seedX * 3, seedZ * 9 + f * 5) - .5) * 4);
     const palette = hash(seedX + f, seedZ - f) > .5 ? a.accentColor : a.canopyColor;
     const c = jitterC(palette, a.jitter, seedX + f, seedZ + f, fy);
-    addBox(out, x + .5 + fx, fy + .5, z + .5 + fz, .5, .5, .5, c[0], c[1], c[2], a.effect);
+    addBox(out, x + .5 + fx, fy + .5, z + .5 + fz, .5, .5, .5, c[0], c[1], c[2], a.effect, 1);
   }
 }
 
@@ -220,12 +228,12 @@ function emitWeeping(out: FoliageBuffers, x: number, baseY: number, z: number, a
   for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
     if (hash(seedX + dx * 7, seedZ + dz * 5) > .85) continue;
     const c = jitterC(a.canopyColor, a.jitter, seedX + dx, seedZ + dz, 0);
-    addBox(out, tx + .5 + dx, top + .5, tz + .5 + dz, 1.05, 1.05, 1.05, c[0], c[1], c[2], a.effect);
+    addBox(out, tx + .5 + dx, top + .5, tz + .5 + dz, 1.05, 1.05, 1.05, c[0], c[1], c[2], a.effect, 1);
     // Hanging strands of canopy from the crown.
     const hang = Math.floor(1 + hash(seedX * 3 + dx, seedZ * 7 + dz) * 2);
     for (let s = 1; s <= hang; s++) {
       const sc = jitterC(a.accentColor, a.jitter, seedX + dx + s, seedZ + dz, s);
-      addBox(out, tx + .5 + dx, top + .5 - s, tz + .5 + dz, .45, 1, .45, sc[0], sc[1], sc[2], a.effect);
+      addBox(out, tx + .5 + dx, top + .5 - s, tz + .5 + dz, .45, 1, .45, sc[0], sc[1], sc[2], a.effect, 1);
     }
   }
 }
@@ -252,7 +260,7 @@ function emitStalk(out: FoliageBuffers, x: number, baseY: number, z: number, a: 
     const vein = hash(seedX * 1.1 + dx, seedZ * .7 + dz) > .84;
     const palette = vein ? a.accentColor : a.canopyColor;
     const c = jitterC(palette, a.jitter, seedX + dx, seedZ + dz, dy);
-    addBox(out, tx + .5 + dx, top + dy + .5, tz + .5 + dz, 1.02, 1.02, 1.02, c[0], c[1], c[2], a.effect);
+    addBox(out, tx + .5 + dx, top + dy + .5, tz + .5 + dz, 1.02, 1.02, 1.02, c[0], c[1], c[2], a.effect, 1);
   }
 }
 
@@ -267,16 +275,44 @@ function emitTree(out: FoliageBuffers, x: number, baseY: number, z: number, a: T
   }
 }
 
+/** Small ground flora (flowers and grass tufts) per surface biome; merged like trees. */
+const FLORA: Record<string, Array<[number, number, number]>> = {
+  overcast: [[.91, .63, .78], [.62, .91, .88], [.95, .85, .54]],
+  storm: [[.66, .74, .92]],
+  glitch: [[.95, .45, .95], [.45, .95, .88]],
+  psychosis: [[.85, .30, .38]],
+  maw: [[.80, .40, .34]],
+};
+
+function emitFlora(out: FoliageBuffers, x: number, baseY: number, z: number, biome: Biome): void {
+  const pick = hash(x * 7.3 + 3, z * 5.1 - 6);
+  const palette = FLORA[biome];
+  if (!palette) return;
+  const head = palette[Math.floor(pick * palette.length) % palette.length];
+  if (pick > .93) {
+    // Flower: thin sage stem + colored head.
+    addBox(out, x + .5, baseY + .22, z + .5, .12, .45, .12, .38, .55, .34, 0);
+    const c = jitterC(head, .06, x, z, 1);
+    addBox(out, x + .5, baseY + .52, z + .5, .3, .26, .3, c[0], c[1], c[2], 0, 1);
+  } else if (pick > .86) {
+    // Grass tuft: two crossed thin blades.
+    addBox(out, x + .42, baseY + .18, z + .5, .1, .36, .1, .47, .66, .40, 0);
+    addBox(out, x + .58, baseY + .14, z + .5, .1, .28, .1, .40, .58, .35, 0);
+  }
+}
+
 /**
- * Appends foliage (trees) into a chunk's geometry buffers. Reads surface and
- * biome via the supplied callbacks so this module stays decoupled from the
- * World class. Cheap no-op for chunks that don't overlap the surface band.
+ * Appends foliage (trees, flowers, grass tufts) into a chunk's geometry buffers.
+ * Reads surface and biome via the supplied callbacks so this module stays
+ * decoupled from the World class. Cheap no-op for chunks that don't overlap
+ * the surface band. `isFelled` suppresses trees the player has toppled.
  */
 export function appendFoliage(
   out: FoliageBuffers,
   cx: number, cy: number, cz: number,
   surface: (x: number, z: number) => number,
   biomeOf: (x: number, y: number, z: number) => Biome,
+  isFelled?: (x: number, z: number) => boolean,
 ): void {
   // Surface lives around y=4..11; only chunks intersecting that band can grow trees.
   if (cy * CHUNK_SIZE > 16 || (cy + 1) * CHUNK_SIZE < 0) return;
@@ -286,7 +322,6 @@ export function appendFoliage(
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       const x = x0 + lx, z = z0 + lz;
       if (Math.abs(x) <= 10 && Math.abs(z) <= 10) continue; // protect spawn clarity
-      if (hash(x, z) <= .985) continue;
       const height = surface(x, z);
       const baseY = height + 1;
       // Only the chunk containing the trunk base owns the tree; the old
@@ -294,9 +329,31 @@ export function appendFoliage(
       // doubling vertex cost and causing exact-overlap z-fighting.
       if (baseY < cy * CHUNK_SIZE || baseY >= (cy + 1) * CHUNK_SIZE) continue;
       const biome = biomeOf(x, height, z);
+      if (isFelled?.(x, z)) {
+        emitFlora(out, x, baseY, z, biome);
+        continue;
+      }
+      if (hash(x, z) <= .985) { emitFlora(out, x, baseY, z, biome); continue; }
       const arch = ARCHETYPES[biome];
       if (!arch) continue;
       emitTree(out, x, baseY, z, arch, x, z);
     }
   }
+}
+
+/** The archetype for a biome's trees, or null where trees don't grow. */
+export function treeArchetype(biome: Biome): TreeArchetype | null {
+  return ARCHETYPES[biome] ?? null;
+}
+
+/**
+ * Emits a tree in LOCAL space (trunk base at the origin cell) into `out`,
+ * deterministically from (seedX, seedZ) — the same tree appendFoliage bakes
+ * into chunk meshes. Used by the felling system to build the topple mesh.
+ */
+export function emitTreeLocal(out: FoliageBuffers, biome: Biome, seedX: number, seedZ: number): boolean {
+  const arch = ARCHETYPES[biome];
+  if (!arch) return false;
+  emitTree(out, 0, 0, 0, arch, seedX, seedZ);
+  return true;
 }

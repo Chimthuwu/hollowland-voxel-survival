@@ -165,8 +165,9 @@ function buildDragonfly(): Built {
   tail.rotation.x = Math.PI / 2 + .07;
   tail.position.set(0, 1.66, .3);
   root.add(tail);
-  // Four narrow wings, pivoted at the thorax.
-  const wingMat = new THREE.MeshStandardMaterial({ color: 0xbfe8dd, roughness: .4, transparent: true, opacity: .45, side: THREE.DoubleSide });
+  // Four narrow wings, pivoted at the thorax. They need enough opacity to read
+  // as attached to the body instead of leaving it floating in mid air.
+  const wingMat = new THREE.MeshStandardMaterial({ color: 0x9fd6c6, roughness: .4, transparent: true, opacity: .62, side: THREE.DoubleSide });
   const wings: THREE.Object3D[] = [];
   for (const sx of [-1, 1]) for (let pair = 0; pair < 2; pair++) {
     const w = new THREE.Group();
@@ -256,9 +257,11 @@ export class Critters {
             m.legs[l].rotation.x = Math.sin(m.flap * scuttle + l * 1.9 + m.phase) * .3;
         }
       } else {
-        // Aerial insects bob and flutter; moths wallow, dragonflies dart and hover higher.
+        // Aerial insects bob and flutter close to the ground: the moth skims the
+        // surface, the dragonfly hovers a little higher. The old offsets left them
+        // hanging two blocks up, which read as debris floating in mid air.
         const dragonfly = m.kind === 'dragonfly';
-        const base = this.world.surface(p.x, p.z) + (dragonfly ? 2.0 : 1.6);
+        const base = this.world.surface(p.x, p.z) + (dragonfly ? .9 : .15);
         const bob = dragonfly ? .22 : .35;
         const ease = dragonfly ? 5 : 3;
         p.y += (base + Math.sin(m.flap * 2.1 + m.phase) * bob - p.y) * Math.min(1, dt * ease);
