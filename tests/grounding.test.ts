@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { Block, type World } from '../src/world';
+import { Block, World, biomeAt } from '../src/world';
 import { Critters } from '../src/critters';
-import { appendFoliage, type FoliageBuffers } from '../src/foliage';
+import { collectTrees } from '../src/forest';
 
 const world: Pick<World, 'get' | 'surface'> = {
   get: (_x: number, y: number, _z: number) => (y < 0 ? Block.Stone : Block.Air),
@@ -40,37 +40,34 @@ describe('critters stay near the ground', () => {
   });
 });
 
-describe('tree canopy is rooted to its trunk', () => {
-  it('starts the canopy at the trunk base so no slab hovers over a stick', () => {
-    // Find a real tree spot: world.ts only grows trees where hash(x,z) > .985.
-    let spot: [number, number] | null = null;
-    for (let x = 12; x < 60 && !spot; x++) {
-      for (let z = -60; z < 60; z++) {
-        const n = Math.sin(x * 127.1 + z * 311.7 + 19.19) * 43758.5453123;
-        if (n - Math.floor(n) > .985) { spot = [x, z]; break; }
+describe('trees are rooted, collidable voxel woodland', () => {
+  it('gives every tree a trunk on the ground and a solid canopy above it', () => {
+    // Use the REAL surface noise so base heights agree with world.get().
+    const world = new World(new THREE.Scene());
+    const trees = collectTrees(12, 90, -90, 90,
+      (x, z) => world.surface(x, z),
+      (x, y) => (y > 64 ? 'sky' : y < 0 ? 'catacombs' : x < 96 ? 'overcast' : 'storm'),
+      () => false);
+    expect(trees.length).toBeGreaterThan(0);
+    const t = trees[0];
+    const trunk = world.get(t.tx, t.baseY, t.tz);
+    expect([Block.Wood, Block.Glitch, Block.Bone, Block.Flesh]).toContain(trunk);
+    // Canopy leaves exist somewhere in the tree's bounding volume — and as
+    // solid blocks they are collidable by construction (world.get != Air).
+    let leafY: number | null = null, topY: number | null = null;
+    for (let y = t.baseY; y <= t.topY; y++) {
+      for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) {
+        const id = world.get(t.tx + dx, y, t.tz + dz);
+        if (id === Block.Leaf) { if (leafY === null) leafY = y; topY = y; }
       }
     }
-    expect(spot).not.toBeNull();
-    const [x, z] = spot!;
-    const surface = () => 8;
-    const out: FoliageBuffers = { positions: [], normals: [], tint: [], effects: [], foliage: [], indices: [] };
-    appendFoliage(out, Math.floor(x / 16), 0, Math.floor(z / 16), surface, () => 'overcast');
-
-    const ys: number[] = [];
-    for (let i = 1; i < out.positions.length; i += 3) ys.push(out.positions[i]);
-    expect(ys.length).toBeGreaterThan(0);
-
-    const baseY = surface() + 1;          // trunk base
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-
-    // The tree reaches the ground (the trunk base is the lowest point) ...
-    expect(minY).toBeLessThanOrEqual(baseY + 0.6);
-    // ... and the widest canopy layer sits within two blocks of the base,
-    // otherwise it reads as a slab floating above a thin stick.
-    const nearBase = ys.filter(y => y <= baseY + 2.6);
-    expect(nearBase.length).toBeGreaterThan(0);
-    // The canopy must still reach upward, so it is not a stump.
-    expect(maxY).toBeGreaterThan(baseY + 3);
+    expect(leafY).not.toBeNull();
+    // Lower canopy hangs near the trunk (no floating slab over a stick)...
+    expect(leafY! - t.baseY).toBeLessThan(t.height * .6 + 2);
+    // ...but the canopy is tall enough to climb, not a stump.
+    expect(topY! - leafY!).toBeGreaterThanOrEqual(2);
+    // The tree is substantially taller than the old 6-row trunks.
+    expect(t.height).toBeGreaterThanOrEqual(5);
+    world.dispose();
   });
 });

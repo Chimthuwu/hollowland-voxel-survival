@@ -33,6 +33,7 @@ export const MINING: Partial<Record<Block, MiningSpec>> = {
   [Block.Mud]:       M(22, 0, true),
   [Block.Scaffold]:  M(16, 0, true),
   [Block.Torch]:     M(8,  0, true),
+  [Block.Leaf]:      M(6,  0, true),
   [Block.Skyfruit]:  M(8,  0, true),
   [Block.Morsel]:    M(8,  0, true),
   [Block.Scorched]:  M(30, 0, true),

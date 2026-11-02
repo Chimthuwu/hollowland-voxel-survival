@@ -12,6 +12,7 @@ import { nearbyLight } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
 import { canBreak, effectiveTier, meleeDamage } from './tools';
 import { Pickups } from './pickups';
+import { Timber } from './timber';
 import { BeamWeapon } from './beam';
 import { PowerUps, REDUCED_GRAVITY, trySpawnPlatform } from './powerups';
 import { Critters } from './critters';
@@ -49,6 +50,8 @@ const powerups = new PowerUps();
 PowerUps.placeAll(world);
 const hooks = new BiomeHooks(world);
 const loot = new Pickups(scene, (x, y, z) => world.get(x, y, z) !== Block.Air);
+// Tree felling: a removed base trunk cell topples the whole tree and spills wood.
+const timber = new Timber(scene, world, (id, pos) => loot.spawn(id, pos, 1), () => audio.event('break'));
 const inventory = new Inventory();
 let menuOpen = false, started = false, dead = false, deathTimer = 0;
 const settings = loadSettings();
@@ -151,8 +154,8 @@ renderer.domElement.addEventListener('mousedown',e=>{
       if(!gate.ok){ui.toast(gate.reason);return;}
       if(inventory.add(hit.id)){
         world.set(hit.x,hit.y,hit.z,Block.Air);chisel.clear(hit.x,hit.y,hit.z);audio.event('break');
-        // Chopping a tree shakes the fruit loose.
-        if(hit.id===Block.Wood&&Math.random()<.35) loot.spawn(Block.Skyfruit,new THREE.Vector3(hit.x+.5,hit.y+.5,hit.z+.5));
+        // Chopping into a trunk (or under it) can be the cut that fells the whole tree.
+        timber.notify(hit.x,hit.y,hit.z,player.position);
         if(tier>0&&!inventory.beam){if(inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');}
       }
     }
@@ -217,6 +220,7 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       critters.update(dt,p,activeBiome);
       const pickups=powerups.update(world,p.x,p.y,p.z);for(const k of pickups)audio.event(k==='gravity'?'shift':'break');
       for(const id of loot.update(dt,p)){ if(inventory.add(id))audio.event('break'); }
+      timber.update(dt);
       restoreTimer-=dt;if(restoreTimer<=0){restoreTimer=1;const proximity=nearbyLight(world,p,activeBiome);restoration=proximity.restore;lit=proximity.lit;}
       if(restoration)sanity=clamp(sanity+7*dt,0,100);else if(activeBiome==='psychosis')sanity=clamp(sanity-3*dt,0,100);else if(activeBiome==='maw'||activeBiome==='glitch'||activeBiome==='veins')sanity=clamp(sanity-.8*dt,0,100);
       if(hook.sanityDrain>0)sanity=clamp(sanity-hook.sanityDrain*dt,0,100);
@@ -238,7 +242,7 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
     } else {highlight.visible=false;cellOutline.visible=false;}
     ui.tick(dt);
     camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));camera.position.add(back);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
-    if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id)=>{inventory.add(id);audio.event('break');if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier);}
+    if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id,x,y,z)=>{inventory.add(id);audio.event('break');timber.notify(x,y,z,player.position);if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier);}
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
     post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'&&!settings.reduceIntensity?1:0;post.uniforms.uPsy.value=activeBiome==='psychosis'&&!settings.reduceIntensity?1:0;

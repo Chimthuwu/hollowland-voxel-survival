@@ -1,43 +1,14 @@
 import type { Biome } from './world';
 
 /**
- * Per-biome tree archetypes. Each archetype describes a low-poly procedural
- * tree built from boxes of arbitrary size; the output is appended directly
- * into a chunk's geometry attribute arrays so all trees in a chunk cost one
- * extra draw call (zero new Three.js Mesh objects).
+ * Forest floor decorations (NO trees — trees are voxel data in forest.ts and
+ * come out of world.get()). Everything emitted here is purely visual: the
+ * player walks/falls through it without collision, by design.
+ *
+ * Per-biome profiles compose occasionally: mushroom clusters are rare and
+ * varied, and are joined by ferns, grass tufts, flowers, moss carpets, rocks,
+ * fallen branches, leaf litter and the occasional mossy fallen log.
  */
-type TreeStyle = 'conifer' | 'windswept' | 'corrupted' | 'weeping' | 'stalk';
-
-interface TreeArchetype {
-  style: TreeStyle;
-  trunkHeight: number;
-  /** Full trunk width at the base and at the top. */
-  trunkWidth: [number, number];
-  /** Max horizontal lean at the trunk top, in blocks. */
-  lean: number;
-  trunkColor: [number, number, number];
-  canopyColor: [number, number, number];
-  accentColor: [number, number, number];
-  /** Small fruits hung from the canopy edge (overcast sky-blue fruit). */
-  fruitColor?: [number, number, number];
-  /** Per-cube color variation amount (0..1). */
-  jitter: number;
-  /** Shader effect id (0=none, 1=flesh, 2=glitch). */
-  effect: number;
-}
-
-const ARCHETYPES: Record<Biome, TreeArchetype | null> = {
-  // Default biome: gray trunks, lavender leaves, sky-blue fruit — overcast but not monochrome.
-  overcast:  { style: 'conifer',   trunkHeight: 6, trunkWidth: [.6, .32], lean: .06, trunkColor: [.40, .40, .42], canopyColor: [.60, .50, .78], accentColor: [.74, .66, .90], fruitColor: [.42, .74, .96], jitter: .05,  effect: 0 },
-  storm:     { style: 'windswept', trunkHeight: 4, trunkWidth: [.55, .38], lean: .45, trunkColor: [.17, .14, .115], canopyColor: [.10, .125, .11], accentColor: [.14, .155, .14], jitter: .035, effect: 0 },
-  glitch:    { style: 'corrupted', trunkHeight: 3, trunkWidth: [.62, .45], lean: 0,   trunkColor: [.28, .20, .26], canopyColor: [.50, .22, .55], accentColor: [.35, .90, .82], jitter: .05,  effect: 2 },
-  psychosis: { style: 'weeping',   trunkHeight: 5, trunkWidth: [.5, .3],   lean: 0,   trunkColor: [.71, .66, .58], canopyColor: [.55, .14, .19], accentColor: [.72, .28, .25], jitter: .04,  effect: 1 },
-  maw:       { style: 'stalk',     trunkHeight: 4, trunkWidth: [.72, .46], lean: .08, trunkColor: [.48, .23, .25], canopyColor: [.52, .15, .17], accentColor: [.82, .38, .32], jitter: .05,  effect: 1 },
-  // Underground / sky biomes don't grow trees.
-  catacombs: null,
-  veins:     null,
-  sky:       null,
-};
 
 // Mirrors world.ts face layout so flat shading and effect attributes stay consistent.
 const FACES = [
@@ -48,32 +19,31 @@ const FACES = [
   { n: [0, 0, 1], v: [[1, 0, 1], [1, 1, 1], [0, 1, 1], [0, 0, 1]], shade: .9 },
   { n: [0, 0, -1], v: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], shade: .65 },
 ];
-
 const CHUNK_SIZE = 16;
-
-export interface FoliageBuffers {
-  positions: number[];
-  normals: number[];
-  tint: number[];
-  effects: number[];
-  /** 1 for leaves/blossoms (sway + seasonal tint), 0 for trunks and ground. */
-  foliage?: number[];
-  indices: number[];
-}
 
 const hash = (x: number, z: number): number => {
   const n = Math.sin(x * 127.1 + z * 311.7 + 19.19) * 43758.5453123;
   return n - Math.floor(n);
 };
 
-/** Deterministic per-cube color jitter so canopies never look flat-shaded uniform. */
+/** Deterministic per-box color jitter so nothing looks flat-shaded uniform. */
 function jitterC(c: readonly [number, number, number], amt: number, sx: number, sz: number, y: number): [number, number, number] {
   if (amt <= 0) return [c[0], c[1], c[2]];
   const j = (k: number) => 1 + (hash(sx * 3.1 + k * 7.7 + y * 1.3, sz * 5.3 + k * 3.3 + y * 2.1) - .5) * 2 * amt;
   return [c[0] * j(0), c[1] * j(1), c[2] * j(2)];
 }
 
-/** Emits an arbitrarily sized box; vertices are nudged 1e-3 along each face normal so decorations never Z-fight voxel faces. */
+export interface FoliageBuffers {
+  positions: number[];
+  normals: number[];
+  tint: number[];
+  effects: number[];
+  /** 1 for swaying leaves/blossoms, 0 for trunks and ground. */
+  foliage?: number[];
+  indices: number[];
+}
+
+/** Emits an arbitrarily sized box; vertices nudged 1e-3 along normals so decorations never Z-fight voxel faces. */
 function addBox(out: FoliageBuffers, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, r: number, g: number, b: number, effect: number, foliage = 0): void {
   const o = 1e-3;
   for (const face of FACES) {
@@ -89,271 +59,198 @@ function addBox(out: FoliageBuffers, cx: number, cy: number, cz: number, sx: num
   }
 }
 
-/** Small root flares at the base so trunks don't look like poles stuck in the ground. */
-function emitRootFlare(out: FoliageBuffers, x: number, baseY: number, z: number, a: TreeArchetype, seedX: number, seedZ: number): void {
-  for (let r = 0; r < 2; r++) {
-    const dir = Math.floor(hash(seedX * 9 + r * 17, seedZ * 7 + r * 29) * 4);
-    const dx = dir === 0 ? 1 : dir === 2 ? -1 : 0;
-    const dz = dir === 1 ? 1 : dir === 3 ? -1 : 0;
-    const c = jitterC(a.trunkColor, .05, seedX + r, seedZ - r, -1);
-    addBox(out, x + .5 + dx * .55, baseY + .18, z + .5 + dz * .55, .6, .44, .6, c[0] * .85, c[1] * .85, c[2] * .85, a.effect);
-  }
+// --- Mushrooms: four distinct species, capped sizes, clustered placement ---
+
+interface ShroomStyle {
+  stemH: [number, number];
+  stemW: number;
+  capR: [number, number];
+  capH: number;
+  domed: boolean;
+  caps: Array<[number, number, number]>;
 }
 
-/** Overcast: gaunt black spruce — tapered trunk, stacked shrinking canopy layers. */
-function emitConifer(out: FoliageBuffers, x: number, baseY: number, z: number, a: TreeArchetype, seedX: number, seedZ: number): void {
-  const h = a.trunkHeight;
-  for (let i = 0; i < h; i++) {
-    const t = h > 1 ? i / (h - 1) : 0;
-    const w = a.trunkWidth[0] + (a.trunkWidth[1] - a.trunkWidth[0]) * t;
-    const c = jitterC(a.trunkColor, a.jitter, seedX, seedZ, i);
-    addBox(out, x + .5, baseY + i + .5, z + .5, w, 1.02, w, c[0], c[1], c[2], a.effect);
-  }
-  emitRootFlare(out, x, baseY, z, a, seedX, seedZ);
-  // The canopy starts one block above the trunk base so the widest layer sits on
-  // the trunk. Starting it higher left a wide slab hovering over a thin stick.
-  const layers = 4, start = 1;
-  for (let l = 0; l < layers; l++) {
-    const frac = l / (layers - 1);
-    const ly = baseY + start + l;
-    const radius = 2.3 - frac * 1.9;
-    const fill = .8 - frac * .18;
-    for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
-      const wob = (hash(seedX * 3 + dx * 7 + l * 13, seedZ * 5 + dz * 11 + l * 3) - .5) * .9;
-      if (Math.hypot(dx, dz) + wob > radius) continue;
-      if (hash(seedX + dx * 3 + l * 7, seedZ + dz * 5 - l * 11) > fill) continue;
-      const palette = l === layers - 1 ? a.accentColor : a.canopyColor;
-      const c = jitterC(palette, a.jitter, seedX + dx, seedZ + dz, l);
-      addBox(out, x + .5 + dx, ly + .5, z + .5 + dz, 1.05, 1, 1.05, c[0], c[1], c[2], a.effect, 1);
-    }
-  }
-  // Spire tip above the top layer.
-  const tip = jitterC(a.accentColor, a.jitter, seedX, seedZ, 99);
-  addBox(out, x + .5, baseY + h + .2, z + .5, .35, 1.6, .35, tip[0], tip[1], tip[2], a.effect, 1);
-/** Small sky-blue (or coral) fruits hang beneath the lower canopy edge; most trees are laden, a few bare. */
-  if (a.fruitColor) {
-    // Per-tree fruit variety: most trees carry sky-blue, some carry warm coral.
-    const gold = hash(seedX * 3.3, seedZ * 7.7) > .62;
-    const base = gold ? [.96, .62, .38] : a.fruitColor;
-    for (let f = 0; f < 4; f++) {
-      if (hash(seedX * 4.7 + f * 13, seedZ * 6.1 + f * 7) < .4) continue;
-      const ang = hash(seedX + f * 3, seedZ * 5 + f * 11) * Math.PI * 2;
-      const rr = 1.1 + hash(seedX * 2 + f, seedZ * 3 + f * 7) * 1.2;
-      const fx = Math.round(Math.cos(ang) * rr), fz = Math.round(Math.sin(ang) * rr);
-      const c = jitterC(base as [number, number, number], a.jitter, seedX + f, seedZ - f, 7);
-      addBox(out, x + .5 + fx, baseY + start + .55, z + .5 + fz, .3, .3, .3, c[0], c[1], c[2], 0);
-    }
-  }
+/** Distinct archetypes: button, taper stalk, wide plate, and a stacked cluster look. */
+const SHROOMS: Array<{ style: ShroomStyle; weight: number }> = [
+  // Tiny button — small cream cap on a stub stem.
+  { weight: 3, style: { stemH: [.14, .22], stemW: .11, capR: [.24, .34], capH: .12, domed: true, caps: [[.82, .42, .38], [.88, .82, .74], [.72, .58, .50]] } },
+  // Tall taper — narrow shot-glass stem, shallow bronze cap.
+  { weight: 2, style: { stemH: [.45, .7], stemW: .13, capR: [.3, .42], capH: .14, domed: false, caps: [[.74, .60, .35], [.62, .48, .44], [.80, .72, .55]] } },
+  // Wide plate — low flat toadstool table.
+  { weight: 2, style: { stemH: [.2, .32], stemW: .16, capR: [.5, .68], capH: .09, domed: false, caps: [[.68, .40, .34], [.55, .60, .42], [.84, .78, .68]] } },
+  // Club — squat, thick, almost no stem.
+  { weight: 1.5, style: { stemH: [.1, .16], stemW: .2, capR: [.36, .5], capH: .2, domed: true, caps: [[.60, .34, .52], [.76, .66, .46]] } },
+];
+
+function emitShroom(out: FoliageBuffers, x: number, baseY: number, z: number, variant: number, scale: number, tilt: number, seedX: number, seedZ: number): void {
+  const pick = SHROOMS[variant % SHROOMS.length];
+  const s = pick.style;
+  const cap: [number, number, number] = s.caps[Math.floor(hash(seedX * 2.9 + variant * 13.7, seedZ * 4.1) * s.caps.length) % s.caps.length];
+  const stemC: [number, number, number] = [.87, .83, .74];
+  const h = s.stemH[0] + (s.stemH[1] - s.stemH[0]) * hash(seedX * 5.5, seedZ * 3.3);
+  const capR = (s.capR[0] + (s.capR[1] - s.capR[0]) * hash(seedX * 7.7, seedZ * 9.1)) * scale;
+  const stemW = s.stemW * scale, capH = s.capH * scale, height = h * scale;
+  const side = Math.floor(hash(seedX + tilt * 31, seedZ - tilt * 17) * 4);
+  const ox = side === 0 ? tilt : side === 2 ? -tilt : 0;
+  const oz = side === 1 ? tilt : side === 3 ? -tilt : 0;
+  // Stem (slightly narrower at the top so it tapers).
+  addBox(out, x + .5 + ox * .3, baseY + height * .5, z + .5 + oz * .3, stemW, height, stemW, stemC[0], stemC[1], stemC[2], 0);
+  // Cap: main slab plus a shallower highlight on top; domed caps get a mid step.
+  const capY = baseY + height + capH * .5;
+  addBox(out, x + .5 + ox, capY, z + .5 + oz, capR, capH, capR, cap[0], cap[1], cap[2], 0);
+  addBox(out, x + .5 + ox * 1.3, capY + capH * .55, z + .5 + oz * 1.3, capR * (s.domed ? .62 : .8), capH * .5, capR * (s.domed ? .62 : .8), Math.min(1, cap[0] * 1.12), Math.min(1, cap[1] * 1.12), Math.min(1, cap[2] * 1.12), 0);
+  if (s.domed) addBox(out, x + .5 + ox * 1.5, capY + capH * .95, z + .5 + oz * 1.5, capR * .3, capH * .4, capR * .3, Math.min(1, cap[0] * 1.2), Math.min(1, cap[1] * 1.2), Math.min(1, cap[2] * 1.2), 0);
 }
 
-/** Storm: windswept stub — accelerating lean, one flat canopy stretched downwind. */
-function emitWindswept(out: FoliageBuffers, x: number, baseY: number, z: number, a: TreeArchetype, seedX: number, seedZ: number): void {
-  const h = a.trunkHeight;
-  const dir = Math.floor(hash(seedX * 1.3 + 5, seedZ * 2.7 + 9) * 4);
-  const wx = dir === 0 ? 1 : dir === 2 ? -1 : 0;
-  const wz = dir === 1 ? 1 : dir === 3 ? -1 : 0;
-  const strength = .5 + hash(seedX * .9, seedZ * 1.7) * .5;
-  let tx = x, tz = z;
-  for (let i = 0; i < h; i++) {
-    const t = (i + 1) / h;
-    const shift = Math.round(t * t * h * a.lean * strength * 2);
-    tx = x + wx * shift; tz = z + wz * shift;
-    const w = a.trunkWidth[0] + (a.trunkWidth[1] - a.trunkWidth[0]) * t;
-    const c = jitterC(a.trunkColor, a.jitter, seedX, seedZ, i);
-    addBox(out, tx + .5, baseY + i + .5, tz + .5, w, 1.02, w, c[0], c[1], c[2], a.effect);
-  }
-  emitRootFlare(out, x, baseY, z, a, seedX, seedZ);
-  // One stub branch on the windward side.
-  const stub = jitterC(a.trunkColor, a.jitter, seedX, seedZ, h);
-  addBox(out, x - wx + .5, baseY + Math.floor(h * .6) + .5, z - wz + .5, .8, .28, .8, stub[0] * .9, stub[1] * .9, stub[2] * .9, a.effect);
-  // Flat, sheared canopy swept 1.5 cells downwind of the trunk top.
-  const topY = baseY + h - 1;
-  for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
-    const along = wx !== 0 ? Math.abs(dx) : Math.abs(dz);
-    const cross = wx !== 0 ? Math.abs(dz) : Math.abs(dx);
-    const wob = (hash(seedX * 3 + dx * 7, seedZ * 5 + dz * 11) - .5) * .8;
-    if (Math.hypot(along * .55, cross * .85) + wob > 1.9) continue;
-    if (hash(seedX + dx * 3, seedZ + dz * 5) > .62) continue;
-    const drop = along >= 2 ? 1 : 0; // trailing edge droops a cell
-    const c = jitterC(a.canopyColor, a.jitter, seedX + dx, seedZ + dz, 3);
-    addBox(out, tx + .5 + dx + wx * 1.5, topY + .5 - drop, tz + .5 + dz + wz * 1.5, 1.05, 1, 1.05, c[0], c[1], c[2], a.effect, 1);
-  }
-}
-
-/** Glitch: a tree mid-corruption — jittering trunk, hollow angular frames, floating detached cubes. */
-function emitCorrupted(out: FoliageBuffers, x: number, baseY: number, z: number, a: TreeArchetype, seedX: number, seedZ: number): void {
-  const h = a.trunkHeight;
-  for (let i = 0; i < h; i++) {
-    const shift = hash(seedX + i * 3.7, seedZ - i * 2.9) > .6 ? (hash(seedX, seedZ * 3 + i) > .5 ? 1 : -1) : 0;
-    const w = a.trunkWidth[0] + (a.trunkWidth[1] - a.trunkWidth[0]) * (i / Math.max(1, h - 1));
-    const c = jitterC(a.trunkColor, a.jitter, seedX, seedZ, i);
-    addBox(out, x + .5 + shift, baseY + i + .5, z + .5, w, 1.02, w, c[0], c[1], c[2], a.effect);
-  }
-  const top = baseY + h - 1;
-  // Two stacked hollow square frames instead of an organic blob.
-  for (let l = 0; l < 2; l++) {
-    const r = 2 - l;
-    for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
-      if (Math.abs(dx) !== r && Math.abs(dz) !== r) continue;
-      if (hash(seedX * 2 + dx, seedZ * 2 + dz + l) > .8) continue;
-      const c = jitterC(a.canopyColor, a.jitter, seedX + dx, seedZ + dz, l);
-      addBox(out, x + .5 + dx, top + l + .5, z + .5 + dz, 1.03, 1, 1.03, c[0], c[1], c[2], a.effect, 1);
-    }
-  }
-  // Detached cubes hovering around the crown.
-  for (let f = 0; f < 3; f++) {
-    const fx = Math.round((hash(seedX * 7 + f, seedZ + f * 3) - .5) * 4);
-    const fy = top + 2 + Math.floor(hash(seedX + f * 11, seedZ * 5 + f) * 3);
-    const fz = Math.round((hash(seedX * 3, seedZ * 9 + f * 5) - .5) * 4);
-    const palette = hash(seedX + f, seedZ - f) > .5 ? a.accentColor : a.canopyColor;
-    const c = jitterC(palette, a.jitter, seedX + f, seedZ + f, fy);
-    addBox(out, x + .5 + fx, fy + .5, z + .5 + fz, .5, .5, .5, c[0], c[1], c[2], a.effect, 1);
-  }
-}
-
-/** Psychosis: pale twisting bone trunk, dense red crown with strands that hang and drip. */
-function emitWeeping(out: FoliageBuffers, x: number, baseY: number, z: number, a: TreeArchetype, seedX: number, seedZ: number): void {
-  const h = a.trunkHeight;
-  let tx = x, tz = z;
-  for (let i = 0; i < h; i++) {
-    // The trunk corkscrews as it rises.
-    tx = x + Math.round(Math.cos(i * 1.15) * .7);
-    tz = z + Math.round(Math.sin(i * .95) * .7);
-    const w = a.trunkWidth[0] + (a.trunkWidth[1] - a.trunkWidth[0]) * (i / Math.max(1, h - 1));
-    const c = jitterC(a.trunkColor, a.jitter, seedX, seedZ, i);
-    addBox(out, tx + .5, baseY + i + .5, tz + .5, w, 1.02, w, c[0], c[1], c[2], a.effect);
-  }
-  emitRootFlare(out, x, baseY, z, a, seedX, seedZ);
-  const top = baseY + h - 1;
-  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
-    if (hash(seedX + dx * 7, seedZ + dz * 5) > .85) continue;
-    const c = jitterC(a.canopyColor, a.jitter, seedX + dx, seedZ + dz, 0);
-    addBox(out, tx + .5 + dx, top + .5, tz + .5 + dz, 1.05, 1.05, 1.05, c[0], c[1], c[2], a.effect, 1);
-    // Hanging strands of canopy from the crown.
-    const hang = Math.floor(1 + hash(seedX * 3 + dx, seedZ * 7 + dz) * 2);
-    for (let s = 1; s <= hang; s++) {
-      const sc = jitterC(a.accentColor, a.jitter, seedX + dx + s, seedZ + dz, s);
-      addBox(out, tx + .5 + dx, top + .5 - s, tz + .5 + dz, .45, 1, .45, sc[0], sc[1], sc[2], a.effect, 1);
-    }
-  }
-}
-
-/** Maw: fleshy stalk with a lumpy bulbous canopy shot through with brighter veins. */
-function emitStalk(out: FoliageBuffers, x: number, baseY: number, z: number, a: TreeArchetype, seedX: number, seedZ: number): void {
-  const h = a.trunkHeight;
-  const leanX = (hash(seedX * 1.7, seedZ) - .5) * 2 * a.lean * h;
-  const leanZ = (hash(seedX, seedZ * 2.3) - .5) * 2 * a.lean * h;
-  let tx = x, tz = z;
-  for (let i = 0; i < h; i++) {
-    const t = (i + 1) / h;
-    tx = x + Math.round(leanX * t); tz = z + Math.round(leanZ * t);
-    const w = a.trunkWidth[0] + (a.trunkWidth[1] - a.trunkWidth[0]) * t;
-    const c = jitterC(a.trunkColor, a.jitter, seedX, seedZ, i);
-    addBox(out, tx + .5, baseY + i + .5, tz + .5, w, 1.02, w, c[0], c[1], c[2], a.effect);
-  }
-  emitRootFlare(out, x, baseY, z, a, seedX, seedZ);
-  const top = baseY + h;
-  for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 2; dy++) for (let dz = -2; dz <= 2; dz++) {
-    const d = Math.hypot(dx, dy * .9, dz) + (hash(seedX * 3 + dx, seedZ * 5 + dz + dy) - .5) * .9;
-    if (d > 2.1) continue;
-    if (hash(seedX + dx * 3 + dy, seedZ + dz * 3 - dy) > .68) continue;
-    const vein = hash(seedX * 1.1 + dx, seedZ * .7 + dz) > .84;
-    const palette = vein ? a.accentColor : a.canopyColor;
-    const c = jitterC(palette, a.jitter, seedX + dx, seedZ + dz, dy);
-    addBox(out, tx + .5 + dx, top + dy + .5, tz + .5 + dz, 1.02, 1.02, 1.02, c[0], c[1], c[2], a.effect, 1);
-  }
-}
-
-function emitTree(out: FoliageBuffers, x: number, baseY: number, z: number, a: TreeArchetype, seedX: number, seedZ: number): void {
-  // Deterministic per-spot seeds so the same (x,z) always builds the same tree.
-  switch (a.style) {
-    case 'conifer':   return emitConifer(out, x, baseY, z, a, seedX, seedZ);
-    case 'windswept': return emitWindswept(out, x, baseY, z, a, seedX, seedZ);
-    case 'corrupted': return emitCorrupted(out, x, baseY, z, a, seedX, seedZ);
-    case 'weeping':   return emitWeeping(out, x, baseY, z, a, seedX, seedZ);
-    case 'stalk':     return emitStalk(out, x, baseY, z, a, seedX, seedZ);
-  }
-}
-
-/** Small ground flora (flowers and grass tufts) per surface biome; merged like trees. */
-const FLORA: Record<string, Array<[number, number, number]>> = {
-  overcast: [[.91, .63, .78], [.62, .91, .88], [.95, .85, .54]],
-  storm: [[.66, .74, .92]],
-  glitch: [[.95, .45, .95], [.45, .95, .88]],
-  psychosis: [[.85, .30, .38]],
-  maw: [[.80, .40, .34]],
-};
-
-function emitFlora(out: FoliageBuffers, x: number, baseY: number, z: number, biome: Biome): void {
-  const pick = hash(x * 7.3 + 3, z * 5.1 - 6);
-  const palette = FLORA[biome];
-  if (!palette) return;
-  const head = palette[Math.floor(pick * palette.length) % palette.length];
-  if (pick > .93) {
-    // Flower: thin sage stem + colored head.
-    addBox(out, x + .5, baseY + .22, z + .5, .12, .45, .12, .38, .55, .34, 0);
-    const c = jitterC(head, .06, x, z, 1);
-    addBox(out, x + .5, baseY + .52, z + .5, .3, .26, .3, c[0], c[1], c[2], 0, 1);
-  } else if (pick > .86) {
-    // Grass tuft: two crossed thin blades.
-    addBox(out, x + .42, baseY + .18, z + .5, .1, .36, .1, .47, .66, .40, 0);
-    addBox(out, x + .58, baseY + .14, z + .5, .1, .28, .1, .40, .58, .35, 0);
-  }
-}
+// --- Other ground flora -----------------------------------------------------
 
 /**
- * Appends foliage (trees, flowers, grass tufts) into a chunk's geometry buffers.
- * Reads surface and biome via the supplied callbacks so this module stays
- * decoupled from the World class. Cheap no-op for chunks that don't overlap
- * the surface band. `isFelled` suppresses trees the player has toppled.
+ * Appends forest-floor decoration into a chunk's geometry buffers. Reads
+ * surface and biome via callbacks so this module stays decoupled from World.
+ * Cheap no-op for chunks that don't overlap the surface band.
  */
-export function appendFoliage(
+export function appendUndergrowth(
   out: FoliageBuffers,
   cx: number, cy: number, cz: number,
   surface: (x: number, z: number) => number,
   biomeOf: (x: number, y: number, z: number) => Biome,
-  isFelled?: (x: number, z: number) => boolean,
 ): void {
-  // Surface lives around y=4..11; only chunks intersecting that band can grow trees.
-  if (cy * CHUNK_SIZE > 16 || (cy + 1) * CHUNK_SIZE < 0) return;
+  // Surface lives around y=4..11; only chunks intersecting that band carry flora.
+  if (cy * CHUNK_SIZE > 24 || (cy + 1) * CHUNK_SIZE < 4) return;
 
   const x0 = cx * CHUNK_SIZE, z0 = cz * CHUNK_SIZE;
   for (let lx = 0; lx < CHUNK_SIZE; lx++) {
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       const x = x0 + lx, z = z0 + lz;
-      if (Math.abs(x) <= 10 && Math.abs(z) <= 10) continue; // protect spawn clarity
       const height = surface(x, z);
       const baseY = height + 1;
-      // Only the chunk containing the trunk base owns the tree; the old
-      // height+12 gate let the chunk above emit every tree a second time,
-      // doubling vertex cost and causing exact-overlap z-fighting.
+      // Only the chunk containing the floor emits the decoration.
       if (baseY < cy * CHUNK_SIZE || baseY >= (cy + 1) * CHUNK_SIZE) continue;
       const biome = biomeOf(x, height, z);
-      if (isFelled?.(x, z)) {
-        emitFlora(out, x, baseY, z, biome);
+      const r = hash(x * 1.61, z * 2.09);
+      const r2 = hash(x * 3.71 + 41, z * 4.93 - 17);
+
+      // Rare mushroom clusters: one in ~14 columns of ground, then only inside
+      // clustered patches — never an even carpet.
+      const clusterCol = Math.floor(x / 5), clusterRow = Math.floor(z / 5);
+      if (hash(clusterCol * 4.31, clusterRow * 7.9) < .32) {
+        const jx = clusterCol * 5 + Math.floor(hash(clusterCol * 3.7, clusterRow * 1.3) * 5);
+        const jz = clusterRow * 5 + Math.floor(hash(clusterCol * 8.3, clusterRow * 5.9) * 5);
+        if (Math.abs(x - jx) + Math.abs(z - jz) <= 1 && r < .5) {
+          const variant = Math.floor(hash(clusterCol * 2.3, clusterRow * 9.7) * SHROOMS.length * 7) % SHROOMS.length;
+          const scale = .75 + hash(x * 1.9, z * 2.9) * .6;
+          emitShroom(out, x, baseY, z, variant + (r2 < .35 ? 1 : 0), scale, .04 + r2 * .08, x, z);
+        }
+      }
+
+      // Litter and moss carpets: quiet flat detail layered over the ground.
+      if (biome === 'overcast' || biome === 'storm') {
+        if (r > .965) {
+          const lit = jitterC([.42, .30, .32], .15, x, z, 2);
+          addBox(out, x + .47, baseY + .012, z + .43, .55, .02, .5, lit[0], lit[1], lit[2], 0);
+          if (r2 > .7) addBox(out, x + .55, baseY + .024, z + .55, .34, .02, .3, lit[0] * 1.15, lit[1] * .95, lit[2] * 1.1, 0);
+        } else if (r > .955) {
+          // Moss carpet: soft green pad hugging the ground.
+          addBox(out, x + .5, baseY + .012, z + .5, .85, .025, .85, .33, .46, .32, 0);
+        }
+      }
+
+      // Ferns: splayed fronds of stacked shrinking leaves.
+      if ((biome === 'overcast' && r < .014) || (biome === 'psychosis' && r < .01)) {
+        const fronds = 3 + Math.floor(r2 * 3);
+        for (let f = 0; f < fronds; f++) {
+          const a = (f / fronds + r * 5) * Math.PI * 2;
+          const fx = Math.cos(a), fz = Math.sin(a);
+          const len = .35 + hash(x * 7.1 + f, z * 5.3) * .25;
+          const c = jitterC([.30, .55, .40], .08, x + f, z, f);
+          for (let s = 0; s < 4; s++) {
+            const t = s / 4;
+            addBox(out, x + .5 + fx * t * .5, baseY + .08 + t * len, z + .5 + fz * t * .5,
+              .16 - t * .1, .05, .16 - t * .1, c[0], c[1], c[2], 0, 1);
+          }
+        }
         continue;
       }
-      if (hash(x, z) <= .985) { emitFlora(out, x, baseY, z, biome); continue; }
-      const arch = ARCHETYPES[biome];
-      if (!arch) continue;
-      emitTree(out, x, baseY, z, arch, x, z);
+
+      // Rocks and stones: one or two wedge-ish grey boxes, occasionally stacked.
+      if (r > .987 && r2 > .35) {
+        const g = .40 + hash(x * 9.7, z * 8.1) * .12;
+        const w = .3 + r2 * .3;
+        addBox(out, x + .5, baseY + w * .3, z + .45, w, w * .6, w * .8, g, g * .99, g * 1.02, 0);
+        if (r2 > .75) addBox(out, x + .56, baseY + w * .62, z + .56, w * .6, w * .35, w * .6, g * 1.08, g * 1.06, g * 1.1, 0);
+      }
+
+      // Fallen branches: a lying bark bar with one twig stub.
+      else if (r > .9835 && r <= .987) {
+        const along = r2 > .5;
+        const b = jitterC([.32, .25, .21], .1, x, z, 3);
+        const len = .7 + (r2 - .5) * .6;
+        if (along) {
+          addBox(out, x + .5, baseY + .07, z + .5, len, .12, .12, b[0], b[1], b[2], 0);
+          if (r2 > .8) addBox(out, x + .5 + (r2 - .8) * len, baseY + .16, z + .5, .1, .16, .1, b[0] * .9, b[1] * .9, b[2] * .9, 0);
+        } else {
+          addBox(out, x + .5, baseY + .07, z + .5, .12, .12, len, b[0], b[1], b[2], 0);
+          if (r2 > .8) addBox(out, x + .5, baseY + .16, z + .5 + (r2 - .8) * len, .1, .16, .1, b[0] * .9, b[1] * .9, b[2] * .9, 0);
+        }
+      }
+
+      // Fallen log, occasional and always mossy-topped.
+      else if (r < .0022) {
+        const along = r2 > .5;
+        const len = 3 + Math.floor(r2 * 4);
+        const bark = jitterC([.30, .235, .20], .07, x, z, 1);
+        if (along) {
+          addBox(out, x + .5 + len * .25, baseY + .3, z + .5, len, .6, .68, bark[0], bark[1], bark[2], 0);
+          addBox(out, x + .5 + len * .25, baseY + .62, z + .5, len * .7, .06, .5, .36, .5, .33, 0);
+          addBox(out, x + .5 - len * .25, baseY + .3, z + .5, .12, .48, .5, .78, .72, .58, 0);
+        } else {
+          addBox(out, x + .5, baseY + .3, z + .5 + len * .25, .68, .6, len, bark[0], bark[1], bark[2], 0);
+          addBox(out, x + .5, baseY + .62, z + .5 + len * .25, .5, .06, len * .7, .36, .5, .33, 0);
+          addBox(out, x + .5, baseY + .3, z + .5 - len * .25, .5, .48, .12, .78, .72, .58, 0);
+        }
+      }
+
+      // Grass tufts and flowers — the previous carpet is now rare.
+      else if (biome === 'overcast' || biome === 'storm' || biome === 'glitch') {
+        if (r > .945) {
+          const blades = 3;
+          for (let b = 0; b < blades; b++) {
+            const bh = .22 + hash(x * 3.3 + b * 7, z * 4.4 + b * 3) * .2;
+            const c = jitterC([.47, .66, .40], .1, x + b, z, b);
+            addBox(out, x + .38 + b * .13, baseY + bh * .5, z + .44 + b * .07, .08, bh, .08, c[0], c[1], c[2], 0, 1);
+          }
+        } else if (r > .935) {
+          const FLORA: Record<string, Array<[number, number, number]>> = {
+            overcast: [[.91, .63, .78], [.62, .91, .88], [.95, .85, .54]],
+            storm: [[.66, .74, .92]],
+            glitch: [[.95, .45, .95], [.45, .95, .88]],
+            psychosis: [[.85, .30, .38]],
+            maw: [[.80, .40, .34]],
+          };
+          const palette = FLORA[biome];
+          if (palette) {
+            const head = palette[Math.floor(hash(x * 7.3 + 3, z * 5.1 - 6) * palette.length) % palette.length];
+            addBox(out, x + .5, baseY + .22, z + .5, .12, .45, .12, .38, .55, .34, 0);
+            const c = jitterC(head, .06, x, z, 1);
+            addBox(out, x + .5, baseY + .52, z + .5, .3, .26, .3, c[0], c[1], c[2], 0, 1);
+          }
+        }
+      }
+
+      // Biome-specific corruption details.
+      if (biome === 'glitch' && r2 > .96) {
+        // Floating, pulsing debris shards.
+        const c = jitterC([.35, .90, .82], .2, x, z, 5);
+        addBox(out, x + .5, baseY + .3 + r * .3, z + .42, .22 + r * .2, .1, .22, c[0], c[1], c[2], 2, 1);
+      } else if (biome === 'psychosis' && r2 > .965 && r <= .965) {
+        // Bleached bone shards half-sunk into the ground.
+        const c = jitterC([.72, .70, .62], .08, x, z, 6);
+        addBox(out, x + .5, baseY + .08, z + .5, .3 + r * .2, .16, .18, c[0], c[1], c[2], 0);
+      } else if (biome === 'maw' && r2 > .955 && r <= .955) {
+        // Pulsing flesh polyps — the maw never fully heals.
+        const c = jitterC([.62, .2, .22], .12, x, z, 7);
+        addBox(out, x + .5, baseY + .12, z + .5, .34 + r * .22, .24, .3, c[0], c[1], c[2], 1, 0);
+      }
     }
   }
-}
-
-/** The archetype for a biome's trees, or null where trees don't grow. */
-export function treeArchetype(biome: Biome): TreeArchetype | null {
-  return ARCHETYPES[biome] ?? null;
-}
-
-/**
- * Emits a tree in LOCAL space (trunk base at the origin cell) into `out`,
- * deterministically from (seedX, seedZ) — the same tree appendFoliage bakes
- * into chunk meshes. Used by the felling system to build the topple mesh.
- */
-export function emitTreeLocal(out: FoliageBuffers, biome: Biome, seedX: number, seedZ: number): boolean {
-  const arch = ARCHETYPES[biome];
-  if (!arch) return false;
-  emitTree(out, 0, 0, 0, arch, seedX, seedZ);
-  return true;
 }

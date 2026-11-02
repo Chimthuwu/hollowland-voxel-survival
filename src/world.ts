@@ -1,8 +1,10 @@
 import * as THREE from 'three';
-import { appendFoliage, type FoliageBuffers } from './foliage';
+import { appendUndergrowth, type FoliageBuffers } from './foliage';
+import * as forest from './forest';
+import type { TreeShape, TreeCell } from './forest';
 import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
 
-export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem }
+export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem, Leaf }
 
 /** The display colour of a block type, used by pickups and other decorations. */
 export function blockColor(id: Block): number {
@@ -85,6 +87,8 @@ const colors: Record<number, number> = {
   [Block.EchoGem]: 0xc7b3ff,
   [Block.AxeHead]: 0x9a8f80,
   [Block.BladeHead]: 0x9fb4c4,
+  // Fallback leaf colour; per-cell canopy tints come from forest.leafTint.
+  [Block.Leaf]: 0x9980c6,
 };
 // Each face is counter-clockwise as seen from outside the block.
 const faces = [
@@ -223,11 +227,20 @@ export class World {
       return island > .62 && y <= islandTop && y >= islandTop - 3 ? Block.Stone : Block.Air;
     }
     if (y > height) {
-      // Trunk blocks stay mineable; foliage.ts renders the full tree (canopy,
-      // branches, lean) into the chunk mesh at these same spots.
-      if ((Math.abs(x) > 10 || Math.abs(z) > 10) && hash(x, z) > .985 && y <= height + 3) {
-        const b = biomeAt(x, height, z);
-        return b === 'glitch' ? Block.Glitch : b === 'psychosis' ? Block.Bone : b === 'maw' ? Block.Flesh : Block.Wood;
+      // Trees are voxel data: trunks (Wood/Glitch/Bone/Flesh by biome), wide
+      // collidable Leaf canopies and hanging Skyfruit — all mineable.
+      const tree = this.treeAtVoxel(x, y, z);
+      if (tree) {
+        if (tree.cell.kind === 'trunk') {
+          switch (tree.shape.biome) {
+            case 'glitch': return Block.Glitch;
+            case 'psychosis': return Block.Bone;
+            case 'maw': return Block.Flesh;
+            default: return Block.Wood;
+          }
+        }
+        if (tree.cell.kind === 'fruit') return Block.Skyfruit;
+        return Block.Leaf;
       }
       return Block.Air;
     }
@@ -272,29 +285,81 @@ export class World {
     }
   }
 
+  // --- Trees: deterministic voxel shapes -----------------------------------
+
+  /** Tree shapes cached per XZ chunk region, built lazily on first query. */
+  private readonly treesByRegion = new Map<number, TreeShape[]>();
+
+  /** Spawn clarity, cave-entrance mouths and entrance ramps stay tree-free. */
+  private isProtectedSpot(x: number, z: number): boolean {
+    if (Math.abs(x) <= 10 && Math.abs(z) <= 10) return true;
+    for (const [ex, ez] of ENTRANCES) if (Math.max(Math.abs(x - ex), Math.abs(z - ez)) <= 2) return true;
+    return false;
+  }
+
+  /** Lazily builds (and caches) the trees that touch one XZ chunk region. */
+  private treesForRegion(tcx: number, tcz: number): TreeShape[] {
+    const rk = (tcx + 32768) * 65536 + (tcz + 32768);
+    const cached = this.treesByRegion.get(rk);
+    if (cached) return cached;
+    const x0 = tcx * SIZE, z0 = tcz * SIZE;
+    // Canopy reach: a tree rooted up to 4 cells outside can touch this region.
+    const all = forest.collectTrees(x0 - 4, x0 + SIZE + 3, z0 - 4, z0 + SIZE + 3,
+      (x, z) => this.surface(x, z), biomeAt, (x, z) => this.isProtectedSpot(x, z));
+    const rx0 = x0, rx1 = x0 + SIZE - 1, rz0 = z0, rz1 = z0 + SIZE - 1;
+    const list = all.filter(t => Math.max(t.tx - 4, rx0) <= Math.min(t.tx + 4, rx1)
+      && Math.max(t.tz - 4, rz0) <= Math.min(t.tz + 4, rz1));
+    this.treesByRegion.set(rk, list);
+    return list;
+  }
+
+  /** The tree and cell occupying a voxel, or null for non-tree voxels. */
+  treeAtVoxel(x: number, y: number, z: number): { shape: TreeShape; cell: TreeCell } | null {
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    if (y <= this.surface(x, z)) return null; // trees live above ground
+    for (const shape of this.treesForRegion(Math.floor(x / SIZE), Math.floor(z / SIZE))) {
+      const cell = forest.cellInTree(shape, x, y, z);
+      if (cell) return { shape, cell };
+    }
+    return null;
+  }
+
   /** True if (x,y,z) is one of the mineable trunk cells of a procedural tree. */
   isTreeTrunk(x: number, y: number, z: number): boolean {
-    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
-    if (Math.abs(x) <= 10 && Math.abs(z) <= 10) return false;
-    if (hash(x, z) <= .985) return false;
-    const height = this.surface(x, z);
-    return y > height && y <= height + 3;
+    const hit = this.treeAtVoxel(x, y, z);
+    return hit !== null && hit.cell.kind === 'trunk';
   }
 
-  /**
-   * Fells the tree rooted at (x,z): clears its trunk cells and marks the spot
-   * so chunk rebuilds stop drawing the baked-in canopy.
-   */
-  fellTree(x: number, z: number): void {
-    x = Math.floor(x); z = Math.floor(z);
-    this.felled.add(`${x},${z}`);
-    const height = this.surface(x, z);
-    for (let y = height + 1; y <= height + 3; y++)
-      if (this.isTreeTrunk(x, y, z)) this.set(x, y, z, Block.Air);
+  /** Sets many cells at once and rebuilds each affected chunk a single time. */
+  setMany(cells: ReadonlyArray<{ x: number; y: number; z: number }>, id: Block): void {
+    const rebuild = new Set<string>();
+    for (const c of cells) {
+      const k = key(c.x, c.y, c.z);
+      this.edits.set(k, id);
+      this.micros.delete(k);
+    }
+    // Deduplicate the chunk set: a cell rebuilds its own chunk plus any
+    // adjacent chunk it shares a border with (neighbour face visibility).
+    for (const c of cells) {
+      const cx = Math.floor(c.x / SIZE), cy = Math.floor(c.y / SIZE), cz = Math.floor(c.z / SIZE);
+      const lx = c.x - cx * SIZE, ly = c.y - cy * SIZE, lz = c.z - cz * SIZE;
+      for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++) {
+        const nx = cx + ox, ny = cy + oy, nz = cz + oz;
+        // Only border-trimmed offsets matter; neighbouring chunks exist when in range.
+        rebuild.add(key(cx, cy, cz));
+        if (lx === 0 && ox === -1) rebuild.add(key(nx, cy, cz));
+        if (lx === SIZE - 1 && ox === 1) rebuild.add(key(nx, cy, cz));
+        if (ly === 0 && oy === -1) rebuild.add(key(cx, ny, cz));
+        if (ly === SIZE - 1 && oy === 1) rebuild.add(key(cx, ny, cz));
+        if (lz === 0 && oz === -1) rebuild.add(key(cx, cy, nz));
+        if (lz === SIZE - 1 && oz === 1) rebuild.add(key(cx, cy, nz));
+      }
+    }
+    for (const ck of rebuild) {
+      const [a, b, c] = ck.split(',').map(Number);
+      if (this.chunks.has(ck)) this.buildChunk(a, b, c);
+    }
   }
-
-  /** Whether the tree rooted at (x,z) has been felled. */
-  readonly felled = new Set<string>();
 
   set(x: number, y: number, z: number, id: Block): void {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
@@ -355,17 +420,38 @@ export class World {
       const x = cx * SIZE + lx, y = cy * SIZE + ly, z = cz * SIZE + lz;
       const id = this.get(x, y, z);
       if (id === Block.Air) continue;
+      color.setHex(colors[id] ?? 0xff00ff);
+      // Trees carry their own per-cell palette (species trunk, canopy tints);
+      // canopy cells also sway and inherit their biome's shader effect.
+      let effect = id === Block.Flesh ? 1 : id === Block.Glitch ? 2 : 0;
+      let foli = 0;
+      const inTreeBand = id === Block.Leaf || id === Block.Skyfruit
+        || ((id === Block.Wood || id === Block.Glitch || id === Block.Bone || id === Block.Flesh) && y > this.surface(x, z));
+      const treeHit = inTreeBand ? this.treeAtVoxel(x, y, z) : null;
+      if (treeHit) {
+        if (treeHit.cell.kind === 'trunk') {
+          const t = forest.trunkTint(treeHit.shape, y);
+          color.setRGB(t[0], t[1], t[2]);
+        } else {
+          const t = forest.leafTint(treeHit.shape, x, y, z, treeHit.cell.accent);
+          color.setRGB(t[0], t[1], t[2]);
+          foli = 1;
+          effect = treeHit.shape.biome === 'glitch' ? 2 : (treeHit.shape.biome === 'psychosis' || treeHit.shape.biome === 'maw') ? 1 : 0;
+        }
+      } else if (id === Block.Leaf) {
+        foli = 1; // hand-placed leaves still sway with the canopy
+      }
+      // Mossy patches break up the sage grass with irregular greener ground.
+      if (id === Block.Grass && noise(x / 7, z / 7) > .63) color.setRGB(color.r * .7 + .08, color.g * .95 + .07, color.b * .55 + .05);
       const profile = this.micros.get(key(x, y, z));
       if (profile) {
         // Carved block: emit its sub-voxel geometry instead of a plain cube.
-        color.setHex(colors[id] ?? 0xff00ff);
         const micro: MicroBuffers = { positions, normals, tint, effects, indices };
         const verts = appendMicroGeometry(micro, x, y, z, profile, [color.r, color.g, color.b],
           (nx, ny, nz, ci, cj) => this.microColumnMask(nx, ny, nz, ci, cj));
         for (let i = 0; i < verts; i++) foliage.push(0);
         continue;
       }
-      color.setHex(colors[id] ?? 0xff00ff);
       // Per-voxel brightness variation gives the ground a dithered pixel-art
       // texture instead of one flat color per block type.
       const vary = .92 + hash3(x, y, z) * .16;
@@ -380,15 +466,17 @@ export class World {
           // Ambient occlusion: darken vertices that sit in a concave corner.
           const ao = this.vertexOcclusion(x, y, z, face, vi, solidAt);
           tint.push(color.r * face.shade * vary * ao, color.g * face.shade * vary * ao, color.b * face.shade * vary * ao);
-          effects.push(id === Block.Flesh ? 1 : id === Block.Glitch ? 2 : 0);
-          foliage.push(0);
+          effects.push(effect);
+          foliage.push(foli);
         }
         indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
       }
     }
     // Append trees into the same chunk geometry so we pay one extra draw call per chunk, not per tree.
+    // Append ground flora (no trees — those are voxel data now) into the same
+    // chunk geometry so we pay one extra draw call per chunk, not per bush.
     const foliageBuffers: FoliageBuffers = { positions, normals, tint, effects, foliage, indices };
-    appendFoliage(foliageBuffers, cx, cy, cz, (x, z) => this.surface(x, z), biomeAt, (x, z) => this.felled.has(`${x},${z}`));
+    appendUndergrowth(foliageBuffers, cx, cy, cz, (x, z) => this.surface(x, z), biomeAt);
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
@@ -457,6 +545,6 @@ export class World {
 
   dispose(): void {
     for (const chunk of this.chunks.values()) { this.scene.remove(chunk.mesh); chunk.mesh.geometry.dispose(); }
-    this.chunks.clear(); this.material.dispose();
+    this.chunks.clear(); this.treesByRegion.clear(); this.material.dispose();
   }
 }

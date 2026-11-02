@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Block, World } from '../src/world';
-import { appendFoliage, type FoliageBuffers } from '../src/foliage';
+import { appendUndergrowth, type FoliageBuffers } from '../src/foliage';
 
 describe('foliage smoke', () => {
   it('emits tree geometry into a chunk buffer at the surface', () => {
@@ -9,7 +9,7 @@ describe('foliage smoke', () => {
     const world = new World(scene);
     const surface = world.surface(20, 20);
     const out: FoliageBuffers = { positions: [], normals: [], tint: [], effects: [], foliage: [], indices: [] };
-    appendFoliage(out, 1, 0, 1, (x, z) => world.surface(x, z), (x, y, z) => {
+    appendUndergrowth(out, 1, 0, 1, (x, z) => world.surface(x, z), (x, y, z) => {
       if (y > 64) return 'sky';
       if (y < -48) return 'veins';
       if (y < 0) return 'catacombs';
@@ -21,7 +21,7 @@ describe('foliage smoke', () => {
     });
     // Out-of-surface chunk emits nothing.
     const out2: FoliageBuffers = { positions: [], normals: [], tint: [], effects: [], foliage: [], indices: [] };
-    appendFoliage(out2, 5, 5, 5, (x, z) => world.surface(x, z), () => 'overcast');
+    appendUndergrowth(out2, 5, 5, 5, (x, z) => world.surface(x, z), () => 'overcast');
     expect(out2.positions.length).toBe(0);
 
     // Sanity: at the surface band, foliage emits triangle indices and respects the chunk size cap.
