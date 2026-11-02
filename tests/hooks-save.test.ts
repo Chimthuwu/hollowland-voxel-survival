@@ -47,7 +47,8 @@ describe('biome hooks', () => {
 
   it('maw flesh underfoot damages health over time', () => {
     const hooks = new BiomeHooks(mockWorld((_x, y, _z) => (y < 0 ? Block.Flesh : Block.Air)));
-    const effects = hooks.tick('maw', ctx({ player: new THREE.Vector3(.5, .5, .5) }));
+    // Feet at y=-0.5 => the cell underfoot is y=-1, which is flesh.
+    const effects = hooks.tick('maw', ctx({ player: new THREE.Vector3(.5, -.5, .5) }));
     expect(effects.damage).toBeGreaterThan(0);
     expect(effects.sound).toBe('squelch');
   });
@@ -82,7 +83,7 @@ describe('biome hooks', () => {
 
   it('veins acid burns', () => {
     const hooks = new BiomeHooks(mockWorld((_x, y, _z) => (y < 0 ? Block.Acid : Block.Air)));
-    const effects = hooks.tick('veins', ctx({ player: new THREE.Vector3(.5, .5, .5) }));
+    const effects = hooks.tick('veins', ctx({ player: new THREE.Vector3(.5, -.5, .5) }));
     expect(effects.damage).toBeGreaterThan(0);
     expect(effects.sound).toBe('bubble');
   });
