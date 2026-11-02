@@ -6,10 +6,13 @@
 
 ## Progression & traversal (agreed 2026-11-01)
 - [x] Build out real cave/cavern systems underground — 3D-noise caverns at all depths with a detail octave, six deterministic walkable staircase entrances (BFS-verified from surface to y=-12), spawn kept shaft-free. Done 2026-11-01; ores/power-ups still open.
-- [ ] Add mineable ore blocks underground.
-- [ ] Beam weapon: one gun, craftable from mined ores, firing a continuous beam used to chop trees, mine rock/ore and fight. Replaces instant-break mining with real progression feel.
-- [ ] Power-ups found in caves: gravity-reduction (higher jumps via lower gravity threshold) and platform-spawning (spawns sky platforms to jump between).
-- [ ] Sky traversal: low-gravity + spawned platforms as the route above the clouds to hidden sky areas and eventually space.
+- [x] Add mineable ore blocks underground. Crystal ore clusters at y -8..-30 (world.ts get()). Done 2026-11-02.
+- [x] Beam weapon: craftable from 5 crystal, hold-to-fire continuous beam that mines/chops/fights (src/beam.ts, recipe in src/ui.ts). Done 2026-11-02.
+- [x] Power-ups found in caves: gravity-reduction (0.55× gravity on pickup) and platform-spawning (right-click spawns scaffold underfoot). Fixed positions in entrance shafts (src/powerups.ts). Done 2026-11-02.
+- [x] Save/load (Ctrl+S/L, auto-load on boot), settings menu (P: volume + reduce visual intensity), per-biome hazard hooks (src/biomeHooks.ts). Done 2026-11-02.
+
+## Sky traversal (remaining)
+- [ ] Sky traversal: gravity + platforms as the route above the clouds to hidden sky areas and eventually space — platform spawn exists, but no platform chains / hidden sky content yet.
 
 ## Prototype
 - [x] Chunked face-culled voxel terrain, five surface regions, Catacombs and basic sky/veins terrain.
