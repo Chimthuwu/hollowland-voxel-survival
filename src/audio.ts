@@ -1,6 +1,6 @@
 import type { Biome } from './world';
 
-type SoundEvent = 'hit' | 'break' | 'thunder' | 'shift' | 'squelch' | 'hurt';
+type SoundEvent = 'hit' | 'break' | 'thunder' | 'shift' | 'squelch' | 'hurt' | 'heartbeat' | 'gust' | 'bubble';
 type Ambient = { drone: number; overtone: number; wind: number; cutoff: number; pulse: number };
 
 // Subtle, distinct textures for each region; levels are relative to the master gain.
@@ -31,6 +31,9 @@ const EFFECTS: Record<SoundEvent, Effect> = {
   shift:   { duration: .65, frequency: 520, endFrequency: 92,  tone: .21, noise: .14, filter: 1600, wave: 'sawtooth' },
   squelch: { duration: .24, frequency: 185, endFrequency: 70,  tone: .18, noise: .25, filter: 550,  wave: 'sine' },
   hurt:    { duration: .4,  frequency: 220, endFrequency: 55,  tone: .26, noise: .15, filter: 800,  wave: 'sawtooth' },
+  heartbeat:{ duration: .5, frequency: 62,  endFrequency: 38,  tone: .34, noise: .06, filter: 260,  wave: 'sine' },
+  gust:    { duration: 1.1, frequency: 320, endFrequency: 120, tone: .06, noise: .30, filter: 1900, wave: 'sawtooth' },
+  bubble:  { duration: .22, frequency: 420, endFrequency: 900, tone: .10, noise: .10, filter: 2600, wave: 'sine' },
 };
 
 /** Lazy Web Audio: call start() in a user gesture, and again if autoplay was blocked. */
@@ -111,6 +114,13 @@ export class AudioEngine {
     if (this.context.state === 'suspended') {
       try { void this.context.resume().catch(() => {}); } catch { /* Unsupported or blocked. */ }
     }
+  }
+
+  /** Master volume in [0,1]. Scales the whole mix. */
+  setVolume(value: number): void {
+    const v = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.25;
+    if (!this.master || !this.context) return;
+    this.master.gain.setTargetAtTime(v, this.context.currentTime, .05);
   }
 
   biome(b: Biome): void {

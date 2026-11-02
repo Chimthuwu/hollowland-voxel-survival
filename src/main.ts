@@ -13,6 +13,9 @@ import { DebugOverlay, type DamageSource } from './debugOverlay';
 import { BeamWeapon } from './beam';
 import { PowerUps, REDUCED_GRAVITY, trySpawnPlatform } from './powerups';
 import { Critters } from './critters';
+import { BiomeHooks, HOOKS } from './biomeHooks';
+import { loadSettings, saveReduceIntensity, saveVolume } from './settings';
+import { clearSave, deserializeInventory, readSave, serializeInventory, writeSave } from './save';
 import './style.css';
 
 const clamp = THREE.MathUtils.clamp;
@@ -38,14 +41,21 @@ const audio = new AudioEngine();
 const beam = new BeamWeapon(scene, world, camera);
 const powerups = new PowerUps();
 PowerUps.placeAll(world);
+const hooks = new BiomeHooks(world);
 const inventory = new Inventory();
 let menuOpen = false, started = false, dead = false, deathTimer = 0;
-const ui = new UI(inventory, open => { menuOpen = open; if (open && document.pointerLockElement) document.exitPointerLock(); });
+const settings = loadSettings();
+const ui = new UI(inventory, open => { menuOpen = open; if (open && document.pointerLockElement) document.exitPointerLock(); }, {
+  volume: settings.volume,
+  reduceIntensity: settings.reduceIntensity,
+  onVolume: value => { const v = saveVolume(value); settings.volume = v; audio.setVolume(v); return v; },
+  onReduceIntensity: value => { settings.reduceIntensity = saveReduceIntensity(value); },
+});
 const player = new Player(0.5,world.surface(0,0)+1.01,0.5);
 const avatar = new Avatar(scene);
 const spawn = player.position.clone();
 let health=100, sanity=100, stamina=100, yaw=0, pitch=0, gravity=1, thirdPerson=false, activeBiome:Biome='overcast';
-let time=0, gravityTimer=0, lightningTimer=6, flashTimer=0, effectTimer=0, invertTimer=0, footsteps=0, lastImpact=0;
+let time=0, gravityTimer=0, lightningTimer=6, flashTimer=0, effectTimer=0, invertTimer=0, footsteps=0, lastImpact=0, hookMessage='';
 const overlay = new DebugOverlay();
 const keys = new Set<string>(); let jumpQueued=false;
 const fog = scene.fog as THREE.FogExp2;
@@ -64,8 +74,8 @@ document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockEleme
 document.addEventListener('mousemove',e=>{if(document.pointerLockElement!==renderer.domElement || menuOpen || dead)return;const invert=invertTimer>0?-1:1;yaw-=e.movementX*.0022*invert;pitch=clamp(pitch-e.movementY*.0022*invert,-1.52,1.52);});
 document.addEventListener('keydown',e=>{
   if(!started)return;
-  if(e.code==='KeyE'){ui.toggleInventory();return;} if(e.code==='KeyC'){ui.toggleCrafting();return;}
-  if(e.code==='Escape'){ui.close();return;} if(menuOpen || dead)return;
+  if(e.code==='KeyE'){ui.toggleInventory();return;} if(e.code==='KeyC'){ui.toggleCrafting();return;} if(e.code==='KeyP'){ui.toggleSettings();return;} if(e.code==='Escape'){ui.close();return;}
+  if(menuOpen || dead)return;
   if(e.code==='KeyV' && !e.repeat)thirdPerson=!thirdPerson;
   if(e.code==='Space'){e.preventDefault();if(!e.repeat)jumpQueued=true;}
   if(/^Digit[1-9]$/.test(e.code))inventory.selected=Number(e.code.slice(5))-1;
@@ -118,8 +128,12 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       const sprint=keys.has('ShiftLeft')&&stamina>0&&(forward!==0||strafe!==0);stamina=clamp(stamina+(sprint?-18:12)*dt,0,100);
       if(invertTimer>0)invertTimer-=dt;else if(activeBiome==='psychosis'&&sanity<35&&Math.random()<dt*.08)invertTimer=2;
       const sign=invertTimer>0?-1:1,under=world.get(Math.floor(p.x),Math.floor(p.y-.08),Math.floor(p.z));
-      const stepGravity = powerups.hasGravity ? gravity * REDUCED_GRAVITY : gravity;
-      const impact=player.step(dt,{forward:forward*sign,strafe:strafe*sign,jump:jumpQueued,yaw},(x,y,z)=>world.get(x,y,z)!==Block.Air,stepGravity,activeBiome==='storm'&&exposed?2:0,(sprint?1.45:1)*(under===Block.Mud?.6:1));jumpQueued=false;lastImpact=impact;
+      const hook=hooks.tick(activeBiome,{world,player:p,lit,sanity,health,dt,time,intense:!settings.reduceIntensity});
+      if(hook.damage>0)damage(hook.damage,'hazard');
+      if(hook.sound)audio.event(hook.sound);
+      if(hook.message)hookMessage=hook.message;
+      const stepGravity = (powerups.hasGravity ? gravity * REDUCED_GRAVITY : gravity) * hook.gravityScale;
+      const impact=player.step(dt,{forward:forward*sign,strafe:strafe*sign,jump:jumpQueued,yaw},(x,y,z)=>world.get(x,y,z)!==Block.Air,stepGravity,activeBiome==='storm'&&exposed?2:0,(sprint?1.45:1)*(under===Block.Mud?.6:1)*hook.speedScale);jumpQueued=false;lastImpact=impact;
       if(impact>11)damage((impact-11)*3,'fall');
       if(under===Block.Flesh && (forward||strafe)){footsteps-=dt;if(footsteps<=0){audio.event('squelch');footsteps=.55;}}
       enemies.update(dt,p,activeBiome,(n)=>damage(n,'enemy'));
@@ -127,14 +141,15 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       const pickups=powerups.update(world,p.x,p.y,p.z);for(const k of pickups)audio.event(k==='gravity'?'shift':'break');
       restoreTimer-=dt;if(restoreTimer<=0){restoreTimer=1;const proximity=nearbyLight(world,p,activeBiome);restoration=proximity.restore;lit=proximity.lit;}
       if(restoration)sanity=clamp(sanity+7*dt,0,100);else if(activeBiome==='psychosis')sanity=clamp(sanity-3*dt,0,100);else if(activeBiome==='maw'||activeBiome==='glitch'||activeBiome==='veins')sanity=clamp(sanity-.8*dt,0,100);
+      if(hook.sanityDrain>0)sanity=clamp(sanity-hook.sanityDrain*dt,0,100);
     }
     world.update(p,time);rain.visible=activeBiome==='storm' && exposed;rain.position.set(p.x,p.y,p.z);if(rain.visible){for(let i=0;i<600;i++){rainPositions[i*3+1]-=dt*12;if(rainPositions[i*3+1]<0)rainPositions[i*3+1]=20;}rainGeo.attributes.position.needsUpdate=true;}
     camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));camera.position.add(back);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
     if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id)=>{inventory.add(id);audio.event('break');});}
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
-    post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'?1:0;post.uniforms.uPsy.value=activeBiome==='psychosis'?1:0;
-    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const info=powerStr+(activeBiome==='glitch'?`ERROR: THE BIOME YOU HAVE ENTERED HAS CRASHED · GRAVITY ${gravity}×`:invertTimer>0?'YOUR HANDS ARE NOT YOUR OWN':`Y ${Math.floor(p.y)} · ${thirdPerson?'THIRD PERSON':'FIRST PERSON'}`);
+    post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'&&!settings.reduceIntensity?1:0;post.uniforms.uPsy.value=activeBiome==='psychosis'&&!settings.reduceIntensity?1:0;
+    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const hookLabel=HOOKS[activeBiome].label;const info=powerStr+(hookMessage||hookLabel);
     ui.update(health,sanity,stamina,activeBiome,info);
     overlay.recordFrame(dt);
     overlay.render(time,{x:p.x,y:p.y,z:p.z,vy:player.verticalVelocity,biome:activeBiome,health,sanity,stamina,gravity,impact:lastImpact});
@@ -143,5 +158,51 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
 }
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight);});
 world.update(player.position,0);ui.update(health,sanity,stamina,activeBiome,'');animate();
+
+// --- Save / load -----------------------------------------------------------
+// Terrain edits are intentionally NOT persisted: the world regenerates from
+// noise on every load. Player state, inventory and progression flags are.
+function captureSave() {
+  return {
+    player: { x: player.position.x, y: player.position.y, z: player.position.z, health, sanity, stamina },
+    inventory: serializeInventory(inventory.slots),
+    progression: { weapon: inventory.weapon, beam: inventory.beam, hasGravity: powerups.hasGravity, hasPlatform: powerups.hasPlatform },
+  };
+}
+function applySave(data: ReturnType<typeof captureSave>): void {
+  player.position.set(data.player.x, data.player.y, data.player.z);
+  player.verticalVelocity = 0;
+  health = clamp(data.player.health, 0, 100);
+  sanity = clamp(data.player.sanity, 0, 100);
+  stamina = clamp(data.player.stamina, 0, 100);
+  inventory.slots = deserializeInventory(data.inventory);
+  inventory.weapon = data.progression.weapon;
+  inventory.beam = data.progression.beam;
+  powerups.hasGravity = data.progression.hasGravity;
+  powerups.hasPlatform = data.progression.hasPlatform;
+}
+function doSave(): void {
+  const outcome = writeSave(captureSave());
+  console.log('[HL save]', outcome.status);
+}
+function doLoad(): void {
+  const outcome = readSave();
+  if (outcome.status === 'loaded') { applySave(outcome.data); console.log('[HL load] ok'); }
+  else console.log('[HL load]', outcome.status);
+}
+window.addEventListener('keydown', e => {
+  if (!e.ctrlKey || e.altKey) return;
+  if (e.code === 'KeyS') { e.preventDefault(); doSave(); }
+  else if (e.code === 'KeyL') { e.preventDefault(); doLoad(); }
+});
+// Load on boot so a returning player resumes where they left off.
+{
+  const outcome = readSave();
+  if (outcome.status === 'loaded') applySave(outcome.data);
+  else if (outcome.status === 'unsupported') {
+    console.warn('[HL load] ignoring save from a newer version:', outcome.version);
+    clearSave();
+  }
+}
 // Development-only inspection hooks for repeatable browser acceptance tests.
-if(import.meta.env.DEV) (window as unknown as {__hollowland:unknown}).__hollowland={player,world,inventory,enemies,damage,scene,ui,overlay,beam,powerups,get state(){return {health,sanity,stamina,activeBiome,gravity,dead,started,menuOpen,lastImpact};}};
+if(import.meta.env.DEV) (window as unknown as {__hollowland:unknown}).__hollowland={player,world,inventory,enemies,damage,scene,ui,overlay,beam,powerups,hooks,get state(){return {health,sanity,stamina,activeBiome,gravity,dead,started,menuOpen,lastImpact,hookMessage};},save:doSave,load:doLoad};

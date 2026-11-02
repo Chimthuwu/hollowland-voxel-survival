@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { appendFoliage, type FoliageBuffers } from './foliage';
 
-export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed }
+export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid }
 export type Biome = 'overcast' | 'storm' | 'glitch' | 'psychosis' | 'maw' | 'catacombs' | 'veins' | 'sky';
 
 /** The surface regions form strips along +X; negative X remains the spawn region. */
@@ -69,6 +69,7 @@ const colors: Record<number, number> = {
   [Block.Crystal]: 0x6fe0d0,
   [Block.GravityCharm]: 0xc7b3ff,
   [Block.PlatformSeed]: 0x8fe6c0,
+  [Block.Acid]: 0x9fd23a,
 };
 // Each face is counter-clockwise as seen from outside the block.
 const faces = [
@@ -159,6 +160,8 @@ export class World {
         if (cavern > .645) return Block.Air;
       }
       if (y < -48 && noise(x / 8 + y / 20, z / 8) > .62) return Block.Flesh;
+      // Acid pools: rare bright-green pockets in the Abyssal Veins layer.
+      if (y < -48 && noise3(x / 7 + 11, y / 5 + 3, z / 7 + 7) > .82) return Block.Acid;
       // Crystal ore: scattered clusters in the deep stone layer (-8..-30), with brighter pockets.
       if (y >= -30 && y <= -8) {
         const ore = noise3(x / 9, y / 9, z / 9);

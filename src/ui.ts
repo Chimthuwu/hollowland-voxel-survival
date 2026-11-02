@@ -109,15 +109,25 @@ export class UI {
   private readonly inventoryPanel: HTMLElement;
   private readonly inventoryGrid: HTMLElement;
   private readonly craftingPanel: HTMLElement;
+  private readonly settingsPanel: HTMLElement;
   private readonly hotbar: HTMLElement;
   private readonly details: HTMLElement;
   private readonly resumeHint: HTMLElement;
   private readonly biome: HTMLElement;
   private readonly bars: Record<'health' | 'sanity' | 'stamina', HTMLElement>;
-  private openPanel: 'inventory' | 'crafting' | null = null;
+  private openPanel: 'inventory' | 'crafting' | 'settings' | null = null;
   private signature = '';
 
-  constructor(private readonly inventory: Inventory, private readonly onMenuChange: (open: boolean) => void) {
+  constructor(
+    private readonly inventory: Inventory,
+    private readonly onMenuChange: (open: boolean) => void,
+    private readonly settings: {
+      volume: number;
+      reduceIntensity: boolean;
+      onVolume: (value: number) => number;
+      onReduceIntensity: (value: boolean) => void;
+    },
+  ) {
     this.root = node('div', 'hollow-ui');
     const hud = node('div', 'hud');
     const corner = node('div', 'hud-corner');
@@ -168,6 +178,38 @@ export class UI {
     this.craftFeedback.setAttribute('aria-live', 'polite');
     this.craftingPanel.append(this.craftFeedback);
 
+    this.settingsPanel = node('section', 'menu-panel settings-panel hidden');
+    this.settingsPanel.append(node('div', 'eyebrow', 'MAKE IT COMFORTABLE'), node('h2', '', 'Settings'),
+      node('p', 'panel-copy', 'These are yours to change. Nothing here changes the world.'));
+    const volumeRow = node('label', 'setting-row');
+    volumeRow.append(node('span', 'setting-label', 'Master volume'));
+    const volume = node('input', 'setting-slider') as HTMLInputElement;
+    volume.type = 'range';
+    volume.min = '0';
+    volume.max = '100';
+    volume.step = '5';
+    volume.value = String(Math.round(this.settings.volume * 100));
+    volume.setAttribute('aria-label', 'Master volume');
+    const volumeValue = node('span', 'setting-value', `${Math.round(this.settings.volume * 100)}%`);
+    volume.addEventListener('input', () => {
+      const next = this.settings.onVolume(Number(volume.value) / 100);
+      volumeValue.textContent = `${Math.round(next * 100)}%`;
+    });
+    volumeRow.append(volume, volumeValue);
+    this.settingsPanel.append(volumeRow);
+
+    const intensityRow = node('label', 'setting-row');
+    intensityRow.append(node('span', 'setting-label', 'Reduce visual intensity'));
+    const intensity = node('input', 'setting-checkbox') as HTMLInputElement;
+    intensity.type = 'checkbox';
+    intensity.checked = this.settings.reduceIntensity;
+    intensity.addEventListener('change', () => { this.settings.onReduceIntensity(intensity.checked); });
+    const intensityValue = node('span', 'setting-value', this.settings.reduceIntensity ? 'ON' : 'OFF');
+    intensity.addEventListener('change', () => { intensityValue.textContent = intensity.checked ? 'ON' : 'OFF'; });
+    intensityRow.append(intensity, intensityValue);
+    this.settingsPanel.append(intensityRow);
+    this.settingsPanel.append(node('p', 'menu-hint', 'P  /  CLOSE'));
+
     this.intro = node('div', 'screen-overlay intro');
     const introCard = node('div', 'intro-card');
     introCard.append(node('div', 'eyebrow', 'A VOXEL SURVIVAL NIGHTMARE'), node('h1', 'title', 'HOLLOWLAND'),
@@ -187,7 +229,7 @@ export class UI {
     deathCard.append(node('div', 'eyebrow', 'THE HOLLOW REMEMBERS'), node('h2', 'death-title', 'GAME OVER'),
       node('p', '', 'The dark takes what it is owed.'));
     this.death.append(deathCard);
-    this.root.append(hud, this.inventoryPanel, this.craftingPanel, this.intro, this.death);
+    this.root.append(hud, this.inventoryPanel, this.craftingPanel, this.settingsPanel, this.intro, this.death);
     document.body.append(this.root);
     this.refresh();
   }
@@ -205,6 +247,7 @@ export class UI {
 
   toggleInventory(): void { this.setPanel(this.openPanel === 'inventory' ? null : 'inventory'); }
   toggleCrafting(): void { this.setPanel(this.openPanel === 'crafting' ? null : 'crafting'); }
+  toggleSettings(): void { this.setPanel(this.openPanel === 'settings' ? null : 'settings'); }
   close(): void { this.setPanel(null); }
   setDeath(visible: boolean): void { this.death.classList.toggle('hidden', !visible); if (visible) this.close(); this.updateResumeHint(); }
   setStarted(started: boolean): void { this.intro.classList.toggle('hidden', started); this.updateResumeHint(); }
@@ -215,12 +258,13 @@ export class UI {
     this.resumeHint.classList.toggle('hidden', !visible);
   }
 
-  private setPanel(panel: 'inventory' | 'crafting' | null): void {
+  private setPanel(panel: 'inventory' | 'crafting' | 'settings' | null): void {
     if (this.openPanel === panel) return;
     const wasOpen = this.openPanel !== null;
     this.openPanel = panel;
     this.inventoryPanel.classList.toggle('hidden', panel !== 'inventory');
     this.craftingPanel.classList.toggle('hidden', panel !== 'crafting');
+    this.settingsPanel.classList.toggle('hidden', panel !== 'settings');
     this.root.classList.toggle('menu-open', panel !== null);
     this.updateResumeHint();
     this.refresh();

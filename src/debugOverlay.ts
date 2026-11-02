@@ -1,6 +1,6 @@
 import type { Biome } from './world';
 
-export type DamageSource = 'fall' | 'enemy' | 'lightning' | 'unknown';
+export type DamageSource = 'fall' | 'enemy' | 'lightning' | 'hazard' | 'unknown';
 
 export interface DamageEvent {
   /** Seconds since the page loaded. */
