@@ -10,11 +10,12 @@ import { Player } from './player';
 import { Avatar } from './avatar';
 import { dayPhase, daylightLevel, nearbyLight, shadeAt, timeOfDayLabel } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
-import { canBreak, effectiveTier, meleeDamage } from './tools';
+import { beamDps, canBreak, effectiveTier, meleeDamage } from './tools';
 import { Pickups } from './pickups';
 import { Timber } from './timber';
 import { BeamWeapon } from './beam';
 import { PowerUps, REDUCED_GRAVITY, trySpawnPlatform } from './powerups';
+import { placeSky } from './sky';
 import { Critters } from './critters';
 import { Chisel } from './chisel';
 import { KnappingMinigame } from './knapping';
@@ -25,17 +26,20 @@ import { clearSave, deserializeInventory, readSave, serializeInventory, writeSav
 import './style.css';
 
 const clamp = THREE.MathUtils.clamp;
-const colors: Record<Biome, number> = {overcast:0x474058, storm:0x11151b, glitch:0x34203f, psychosis:0x332b38, maw:0x401014, catacombs:0x0b0b10, veins:0x29090f, sky:0x31333d};
+// Biome scene palettes, recolored in the art pivot so every hostile region
+// reads at a glance: storm is cold electric teal, glitch is hot orchid
+// magenta, psychosis is a pale sick mauve, and the maw is a deep gore red.
+const colors: Record<Biome, number> = {overcast:0x474058, storm:0x16222e, glitch:0x40144c, psychosis:0x3b2e40, maw:0x4a0d13, catacombs:0x0b0b10, veins:0x29090f, sky:0x31333d};
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(colors.overcast);
-scene.fog = new THREE.FogExp2(colors.overcast, 0.027);
+scene.fog = new THREE.FogExp2(colors.overcast, 0.019);
 const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.querySelector('#app')!.appendChild(renderer.domElement);
 renderer.domElement.addEventListener('webglcontextlost', event => { event.preventDefault(); const el=document.createElement('div'); el.style.cssText='position:fixed;inset:0;z-index:10000;background:#111;color:white;padding:3rem;font:18px sans-serif'; el.textContent='The graphics context was lost. Close other graphics-heavy tabs and reload the game.'; document.body.appendChild(el); });
-const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.07, 180);
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.07, 220); // far plane lifted so the cloud deck stays visible
 const ambient = new THREE.HemisphereLight(0xc3bde8, 0x2a2430, 1.15); scene.add(ambient);
 const sun = new THREE.DirectionalLight(0xd9cdbd, 1.3); sun.position.set(15,35,10); scene.add(sun);
 const flash = new THREE.PointLight(0xdcecff,0,45); scene.add(flash);
@@ -66,6 +70,8 @@ const audio = new AudioEngine();
 const beam = new BeamWeapon(scene, world, camera);
 const powerups = new PowerUps();
 PowerUps.placeAll(world);
+// Sky traversal: the scaffold chain up to the crystal beacon above the clouds.
+placeSky(world);
 const hooks = new BiomeHooks(world);
 const loot = new Pickups(scene, (x, y, z) => world.get(x, y, z) !== Block.Air);
 // Tree felling: a removed base trunk cell topples the whole tree and spills wood.
@@ -166,6 +172,9 @@ document.addEventListener('keydown',e=>{
   keys.add(e.code);
 });
 document.addEventListener('keyup',e=>keys.delete(e.code));
+// The browser context menu never belongs in HOLLOWLAND: right-click is the
+// place/step button, and losing it to the OS menu at a bad moment is a death.
+document.addEventListener('contextmenu',e=>e.preventDefault());
 window.addEventListener('blur',()=>keys.clear());
 window.addEventListener('wheel',e=>{if(started&&!menuOpen){inventory.selected=(inventory.selected+(e.deltaY>0?1:8))%9;}},{passive:true});
 renderer.domElement.addEventListener('contextmenu',e=>e.preventDefault());
@@ -221,7 +230,11 @@ renderer.domElement.addEventListener('mousedown',e=>{
       }
     }
   } else if(e.button===2){
-    // Platform-seed power-up: right-click drops a scaffold underfoot if the cell is air.
+    // Right-click is the "use" button: consumables restore you, the platform
+    // seed drops a scaffold underfoot, anything else is placed as a block.
+    const held=inventory.selectedItem();
+    if(held?.id===Block.Bandage){health=clamp(health+25,0,100);inventory.remove(Block.Bandage,1);ui.toast('THE BANDAGE PULLS THE HURT TIGHT');audio.event('break');return;}
+    if(held?.id===Block.Morsel){health=clamp(health+7,0,100);inventory.remove(Block.Morsel,1);ui.toast('Raw and chewy. It helps. A little.');audio.event('break');return;}
     if(powerups.hasPlatform && trySpawnPlatform(world,player.position.x,player.position.y,player.position.z)){
       audio.event('break');
       return;
@@ -270,7 +283,8 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
     // floor keeps the surface readable instead of pitch black.
     const dayPhase_ = dayPhase(time), dayLevel = daylightLevel(dayPhase_);
     const underground = activeBiome==='catacombs'||activeBiome==='veins';
-    const targetColor=new THREE.Color(colors[activeBiome]).multiplyScalar(underground?1:.4+.6*dayLevel);(scene.background as THREE.Color).lerp(targetColor,Math.min(1,dt*1.5));fog.color.lerp(targetColor,Math.min(1,dt*1.5));fog.density=THREE.MathUtils.lerp(fog.density,activeBiome==='catacombs'?.08:activeBiome==='storm'?.048:.027,Math.min(1,dt));
+    const targetColor=new THREE.Color(colors[activeBiome]).multiplyScalar(underground?1:.4+.6*dayLevel);(scene.background as THREE.Color).lerp(targetColor,Math.min(1,dt*1.5));fog.color.lerp(targetColor,Math.min(1,dt*1.5));    // Fog pulled way in: the world reads further now the chunk radius is 3.
+    fog.density=THREE.MathUtils.lerp(fog.density,activeBiome==='catacombs'?.058:activeBiome==='storm'?.034:.019,Math.min(1,dt));
     ambient.intensity=(activeBiome==='catacombs'?.20:activeBiome==='veins'?.30:.98)*(underground?1:.55+.45*dayLevel);sun.intensity=(activeBiome==='catacombs'?.08:activeBiome==='storm'?.25:1.0)*(underground?1:.45+.55*dayLevel);
     const sunAngle=(dayPhase_-.25)*Math.PI*2;sun.position.set(Math.cos(sunAngle)*28,Math.max(9,Math.sin(sunAngle)*30+12),16);
     // --- Canopy gloom ---
@@ -291,13 +305,24 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       const sprint=keys.has('ShiftLeft')&&stamina>0&&(forward!==0||strafe!==0);stamina=clamp(stamina+(sprint?-18:12)*dt,0,100);
       if(invertTimer>0)invertTimer-=dt;else if(activeBiome==='psychosis'&&sanity<35&&Math.random()<dt*.08)invertTimer=2;
       const sign=invertTimer>0?-1:1,under=world.get(Math.floor(p.x),Math.floor(p.y-.08),Math.floor(p.z));
+      // Swimming: waist- or feet-deep in Water counts as immersed. Water is
+      // not solid — you sink slowly, hold Space to paddle up, move sluggish
+      // and a splash-landing never counts as a fall.
+      const torso=world.get(Math.floor(p.x),Math.floor(p.y+.6),Math.floor(p.z));
+      const inWater=under===Block.Water||torso===Block.Water;
       const hook=hooks.tick(activeBiome,{world,player:p,lit,sanity,health,dt,time,intense:!settings.reduceIntensity});
       if(hook.damage>0)damage(hook.damage,'hazard');
       if(hook.sound)audio.event(hook.sound);
       if(hook.message)hookMessage=hook.message;
       if(hook.hallucination>0)startPhantom();
       const stepGravity = (powerups.hasGravity ? gravity * REDUCED_GRAVITY : gravity) * hook.gravityScale;
-      const impact=player.step(dt,{forward:forward*sign,strafe:strafe*sign,jump:jumpQueued,yaw},(x,y,z)=>world.get(x,y,z)!==Block.Air,stepGravity,activeBiome==='storm'&&exposed?2:0,(sprint?1.45:1)*(under===Block.Mud?.6:1)*hook.speedScale);jumpQueued=false;lastImpact=impact;
+      const impact=player.step(dt,{forward:forward*sign,strafe:strafe*sign,jump:jumpQueued,yaw},(x,y,z)=>{const b=world.get(x,y,z);return b!==Block.Air&&b!==Block.Water;},stepGravity,activeBiome==='storm'&&exposed?2:0,(sprint?1.45:1)*(under===Block.Mud?.6:1)*(inWater?.55:1)*hook.speedScale);jumpQueued=false;lastImpact=impact;
+      if(inWater){
+        if(keys.has('Space'))player.verticalVelocity=Math.min(3.2,player.verticalVelocity+16*dt);
+        // Buoyancy: cap the sink speed so water always slows you gently — and
+        // the capped impact can never reach the 11 m/s fall-damage threshold.
+        player.verticalVelocity=Math.max(player.verticalVelocity,-2.6);
+      }
       if(impact>11)damage((impact-11)*3,'fall');
       if(under===Block.Flesh && (forward||strafe)){footsteps-=dt;if(footsteps<=0){audio.event('squelch');footsteps=.55;}}
       enemies.update(dt,p,activeBiome,(n)=>damage(n,'enemy'),dayPhase_,lit);
@@ -336,7 +361,17 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       camera.position.z+=(Math.random()-.5)*s;
       camera.rotation.z+=(Math.random()-.5)*s*.18;
     }
-    if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id,x,y,z)=>{inventory.add(id);audio.event('break');timber.notify(x,y,z,player.position);if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier);}
+    if(beam.isActive()){camera.getWorldDirection(aimDirection);
+      // The beam is flesh-hungry too: cut the nearest creature along the aim
+      // line at beam DPS. Its body then blocks the frame — reach is clamped to
+      // the impact distance so the visual trace ends at the body and the stone
+      // behind it only starts melting once the blood is done.
+      const cut=enemies.beamCut(eye,aimDirection,6,beamDps(3),dt,(pos,kind)=>{
+        const list=CREATURE_DROPS[kind]??[[Block.Morsel,1] as [Block,number]];
+        for(const [id,n] of list)for(let i=0;i<n;i++)loot.spawn(id,pos.clone().setY(pos.y+.4),1);
+      });
+      if(cut>0&&Math.random()<dt*9)audio.event('hit');
+      beam.update(dt,eye,aimDirection,6,(id,x,y,z)=>{inventory.add(id);audio.event('break');timber.notify(x,y,z,player.position);if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier,cut>0?cut:Infinity);}
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
     post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'&&!settings.reduceIntensity?1:0;post.uniforms.uPsy.value=Math.min(1.5,(activeBiome==='psychosis'&&!settings.reduceIntensity?1:0)+(phantomTimer>0?.45:0));

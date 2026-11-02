@@ -9,20 +9,22 @@ export type Recipe =
 export type InventorySlot = { id: Block; count: number };
 
 // Ingredient amounts are kept here so they can be tuned without changing the UI.
-export const RECIPES: Record<Recipe, { name: string; description: string }> = {
-  torch: { name: 'Torch ×4', description: '1 wood + 1 stone' },
-  weapon: { name: 'Stone blade', description: '2 wood + 3 stone' },
-  scaffold: { name: 'Scaffold ×4', description: '2 wood' },
-  totem: { name: 'Warding totem', description: '3 stone + 2 glitch / flesh' },
-  beam: { name: 'Beam weapon', description: '5 crystal — a continuous mining tool' },
-  chisel: { name: 'Chisel', description: '3 stone + 2 wood — carve detail into blocks' },
-  knapPick: { name: 'Knapped pick head', description: '2 stone + 1 wood — chip it well for a fine edge' },
-  knapAxe: { name: 'Knapped axe head', description: '2 stone + 1 wood — chip it well for a fine edge' },
-  knapBlade: { name: 'Knapped blade head', description: '2 stone + 1 wood — chip it well for a fine edge' },
-  plate: { name: 'Chitin cuirass', description: '3 chitin + 2 silk — blunts a third of enemy strikes' },
-  clawShiv: { name: 'Claw shiv', description: '2 claws + 1 wood — adds a bonus to every melee hit (stacks to +12)' },
-  hideGuard: { name: 'Hide guard', description: '4 hide + 1 silk — halves hazard damage (flesh, acid, lightning)' },
-  bandage: { name: 'Bandage', description: '2 silk — select and press F to restore 25 vitality' },
+// `cost` drives the live have/need chips in the crafting panel, so a player can
+// see exactly what a recipe wants and what they already carry.
+export const RECIPES: Record<Recipe, { name: string; description: string; cost: Array<[Block, number]> }> = {
+  torch: { name: 'Torch ×4', description: '1 wood + 1 stone', cost: [[Block.Wood, 1], [Block.Stone, 1]] },
+  weapon: { name: 'Stone blade', description: '2 wood + 3 stone', cost: [[Block.Wood, 2], [Block.Stone, 3]] },
+  scaffold: { name: 'Scaffold ×4', description: '2 wood', cost: [[Block.Wood, 2]] },
+  totem: { name: 'Warding totem', description: '3 stone + 2 glitch / flesh', cost: [[Block.Stone, 3]] },
+  beam: { name: 'Beam weapon', description: '5 crystal — a continuous mining tool', cost: [[Block.Crystal, 5]] },
+  chisel: { name: 'Chisel', description: '3 stone + 2 wood — carve detail into blocks', cost: [[Block.Stone, 3], [Block.Wood, 2]] },
+  knapPick: { name: 'Knapped pick head', description: '2 stone + 1 wood — chip it well for a fine edge', cost: [[Block.Stone, 2], [Block.Wood, 1]] },
+  knapAxe: { name: 'Knapped axe head', description: '2 stone + 1 wood — chip it well for a fine edge', cost: [[Block.Stone, 2], [Block.Wood, 1]] },
+  knapBlade: { name: 'Knapped blade head', description: '2 stone + 1 wood — chip it well for a fine edge', cost: [[Block.Stone, 2], [Block.Wood, 1]] },
+  plate: { name: 'Chitin cuirass', description: '3 chitin + 2 silk — blunts a third of enemy strikes', cost: [[Block.Chitin, 3], [Block.Silk, 2]] },
+  clawShiv: { name: 'Claw shiv', description: '2 claws + 1 wood — adds a bonus to every melee hit (stacks to +12)', cost: [[Block.Claw, 2], [Block.Wood, 1]] },
+  hideGuard: { name: 'Hide guard', description: '4 hide + 1 silk — halves hazard damage (flesh, acid, lightning)', cost: [[Block.Hide, 4], [Block.Silk, 1]] },
+  bandage: { name: 'Bandage', description: '2 silk — right-click or F to restore 25 vitality', cost: [[Block.Silk, 2]] },
 };
 
 /** The knapping recipes, and the tool head each one produces. */
@@ -48,6 +50,7 @@ const NAMES: Record<number, string> = {
   [Block.CopperOre]: 'Copper ore', [Block.EchoGem]: 'Echo gem',
   [Block.Chitin]: 'Chitin plate', [Block.Silk]: 'Silk fibre', [Block.Hide]: 'Dinosaur hide',
   [Block.Claw]: 'Claw', [Block.Bandage]: 'Bandage',
+  [Block.Sand]: 'Sand', [Block.Snow]: 'Snow', [Block.Water]: 'Water',
 };
 
 /**
@@ -82,6 +85,9 @@ const DESCRIPTIONS: Record<number, string> = {
   [Block.Hide]: 'thick scaled hide from grazers and raptors; durable gear',
   [Block.Claw]: 'a sharp curved talon; blades and cutting tools',
   [Block.Bandage]: 'select it and press F to patch up 25 vitality',
+  [Block.Sand]: 'dry drift sand from the desert wastes',
+  [Block.Snow]: 'cold summit snow from the high peaks',
+  [Block.Water]: 'water cannot be mined — swim, don\'t dig',
 };
 
 /** "Name — what it does", for HUD and tooltip use. */
@@ -89,6 +95,20 @@ export function itemLabel(id: Block): string {
   const name = NAMES[id] ?? 'Unknown';
   const desc = DESCRIPTIONS[id];
   return desc ? `${name} — ${desc}` : name;
+}
+
+/**
+ * Plain-language "what you still owe" for a failed craft, e.g.
+ * "Still need: 2 silk fibre, 1 stone." Empty string when costs are covered —
+ * the failure then lies in a flag (already crafted, full pack), not materials.
+ */
+export function missingIngredients(inventory: Pick<Inventory, 'count'>, recipe: Recipe): string {
+  const parts: string[] = [];
+  for (const [id, n] of RECIPES[recipe].cost) {
+    const have = inventory.count(id);
+    if (have < n) parts.push(`${n - have} ${(NAMES[id] ?? 'unknown item').toLowerCase()}`);
+  }
+  return parts.length ? `Still need: ${parts.join(', ')}.` : '';
 }
 
 export class Inventory {
@@ -259,6 +279,7 @@ export class UI {
   private readonly inventoryPanel: HTMLElement;
   private readonly inventoryGrid: HTMLElement;
   private readonly craftingPanel: HTMLElement;
+  private readonly recipes: HTMLElement;
   private readonly settingsPanel: HTMLElement;
   private readonly hotbar: HTMLElement;
   private readonly details: HTMLElement;
@@ -316,34 +337,9 @@ export class UI {
       this.inventoryGrid, node('p', 'menu-hint', 'E  /  CLOSE    ·    CLICK A SLOT  /  SELECT'));
     this.craftingPanel = node('section', 'menu-panel crafting-panel hidden');
     this.craftingPanel.append(node('div', 'eyebrow', 'MAKE SOMETHING OF THE DARK'), node('h2', '', 'Crafting'),
-      node('p', 'panel-copy', 'Gather what you need. Click a recipe to craft it.'));
-    const recipes = node('div', 'recipes');
-    for (const recipe of Object.keys(RECIPES) as Recipe[]) {
-      const button = node('button', 'recipe');
-      button.type = 'button';
-      button.append(node('strong', '', RECIPES[recipe].name), node('span', '', RECIPES[recipe].description));
-      button.addEventListener('click', () => {
-        const kappingTool = KNAPPING_RECIPES[recipe];
-        if (kappingTool && this.onKnapping) {
-          // Knapping needs the minigame: consume the materials, then hand
-          // control to the player so they actually chip the stone.
-          const crafted = this.inventory.craft(recipe);
-          this.refresh();
-          if (!crafted) {
-            this.craftFeedback.textContent = 'Not enough materials for that.';
-            return;
-          }
-          this.craftFeedback.textContent = 'Chip away at the stone.';
-          this.onKnapping(kappingTool);
-          return;
-        }
-        const crafted = this.inventory.craft(recipe);
-        this.refresh();
-        this.craftFeedback.textContent = crafted ? `${RECIPES[recipe].name} crafted.` : 'Not enough materials, inventory full, or already crafted.';
-      });
-      recipes.append(button);
-    }
-    this.craftingPanel.append(recipes);
+      node('p', 'panel-copy', 'Gather what you need, then click a recipe. Gold means you could make it right now; grey lists what is still missing.'));
+    this.recipes = node('div', 'recipes');
+    this.craftingPanel.append(this.recipes);
     this.craftFeedback = node('p', 'craft-feedback', 'C  /  CLOSE');
     this.craftFeedback.setAttribute('aria-live', 'polite');
     this.craftingPanel.append(this.craftFeedback);
@@ -463,10 +459,69 @@ export class UI {
     if (wasOpen !== (panel !== null)) this.onMenuChange(panel !== null);
   }
 
+  /** True when the pack at least covers the listed ingredient counts. */
+  private affordable(recipe: Recipe): boolean {
+    if (recipe === 'clawShiv' && this.inventory.edgeBonus >= 12) return false; // cap reached
+    return RECIPES[recipe].cost.every(([id, n]) => this.inventory.count(id) >= n);
+  }
+
+  /** A specific reason a craft failed; the generic line only when unknown. */
+  private failText(recipe: Recipe): string {
+    const owned: Partial<Record<Recipe, boolean>> = {
+      weapon: this.inventory.weapon,
+      beam: this.inventory.beam,
+      plate: this.inventory.armored,
+      hideGuard: this.inventory.hideGuarded,
+      chisel: this.inventory.slots.some(slot => slot.id === Block.Chisel),
+    };
+    if (owned[recipe]) return 'Already made — you carry it.';
+    return missingIngredients(this.inventory, recipe) || 'Not enough materials, inventory full, or already crafted.';
+  }
+
+  /** Rebuilds the crafting list with live have/need chips and craftable glow. */
+  private renderRecipes(): void {
+    this.recipes.replaceChildren();
+    for (const recipe of Object.keys(RECIPES) as Recipe[]) {
+      const button = node('button', `recipe${this.affordable(recipe) ? ' craftable' : ' unaffordable'}`);
+      button.type = 'button';
+      button.append(node('strong', '', RECIPES[recipe].name), node('span', '', RECIPES[recipe].description));
+      const cost = node('span', 'recipe-cost');
+      for (const [id, n] of RECIPES[recipe].cost) {
+        const have = Math.min(n, this.inventory.count(id));
+        const chip = node('span', `ing block-${id}`);
+        chip.setAttribute('aria-hidden', 'true');
+        const count = node('span', have >= n ? 'ing-count have' : 'ing-count', `${have}/${n}`);
+        cost.append(chip, count);
+      }
+      button.append(cost);
+      button.addEventListener('click', () => {
+        const kappingTool = KNAPPING_RECIPES[recipe];
+        if (kappingTool && this.onKnapping) {
+          // Knapping needs the minigame: consume the materials, then hand
+          // control to the player so they actually chip the stone.
+          const crafted = this.inventory.craft(recipe);
+          this.refresh();
+          if (!crafted) {
+            this.craftFeedback.textContent = this.failText(recipe);
+            return;
+          }
+          this.craftFeedback.textContent = 'Chip away at the stone.';
+          this.onKnapping(kappingTool);
+          return;
+        }
+        const crafted = this.inventory.craft(recipe);
+        this.refresh();
+        this.craftFeedback.textContent = crafted ? `${RECIPES[recipe].name} crafted.` : this.failText(recipe);
+      });
+      this.recipes.append(button);
+    }
+  }
+
   private refresh(): void {
-    const signature = JSON.stringify([this.inventory.slots, this.inventory.selected, this.inventory.weapon, this.inventory.beam]);
+    const signature = JSON.stringify([this.inventory.slots, this.inventory.selected, this.inventory.weapon, this.inventory.beam, this.inventory.armored, this.inventory.edgeBonus]);
     if (signature === this.signature) return;
     this.signature = signature;
+    this.renderRecipes();
     this.hotbar.replaceChildren();
     this.inventoryGrid.replaceChildren();
     for (let i = 0; i < 9; i++) {

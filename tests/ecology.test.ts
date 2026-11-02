@@ -57,6 +57,20 @@ describe('overcast ecology: light- and pack-dependent behaviour', () => {
     expect(s.x).toBeGreaterThan(2);
   });
 
+  it('a kill sprays a short anatomy-tinted gib burst that cleans itself up', () => {
+    const scene = new THREE.Scene();
+    const enemies = new Enemies(scene, world);
+    enemies.spawnKind('thrasher', new Vector3(0, 0, -3));
+    // Two solid hits put the 66 hp thrasher down; the kill spawns 7 gibs
+    // alongside the still-animating corpse.
+    enemies.attack(new Vector3(0, 1, 0), new Vector3(0, 0, -1), 6, 40);
+    expect(enemies.attack(new Vector3(0, 1, 0), new Vector3(0, 0, -1), 6, 40, () => {})).toBe(true);
+    expect(scene.children).toHaveLength(8); // corpse + 7 gib cubes
+    // Gibs fall, tumble and vanish — inside a second nothing is left over.
+    for (let i = 0; i < 60; i++) enemies.update(1 / 60, new Vector3(0, 0, 0), 'overcast', () => {});
+    expect(scene.children).toHaveLength(0);
+  });
+
   it('saurolisks charge fast: short wind-up, quick committed lunge, brief recovery', () => {
     const enemies = new Enemies(new THREE.Scene(), world);
     enemies.spawnKind('saurolisk', new Vector3(0, 0, -7));

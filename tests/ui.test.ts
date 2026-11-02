@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Block } from '../src/world';
-import { Inventory } from '../src/ui';
+import { Inventory, missingIngredients } from '../src/ui';
 
 describe('Inventory', () => {
   it('stacks resources and removes only what is available', () => {
@@ -115,6 +115,15 @@ describe('Inventory', () => {
       expect(inventory.craft('bandage')).toBe(true);
       expect(inventory.count(Block.Bandage)).toBe(1);
       expect(inventory.count(Block.Silk)).toBe(2);
+    });
+
+    it('names exactly what is missing for a failed craft', () => {
+      const inventory = new Inventory();
+      inventory.add(Block.Chitin, 2); inventory.add(Block.Silk, 5);
+      expect(missingIngredients(inventory, 'plate')).toBe('Still need: 1 chitin plate.');
+      inventory.add(Block.Chitin);
+      expect(missingIngredients(inventory, 'plate')).toBe('');
+      expect(missingIngredients(inventory, 'torch')).toBe('Still need: 1 wood, 1 stone.');
     });
   });
 });

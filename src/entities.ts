@@ -22,6 +22,14 @@ interface MobParts {
   orbiters: THREE.Object3D[];
 }
 
+/** A tumbling chunk of a destroyed creature — the kill's gore footprint. */
+interface Gib {
+  mesh: THREE.Mesh;
+  vx: number; vy: number; vz: number;
+  spinX: number; spinZ: number;
+  life: number;
+}
+
 type Mob = {
   root: THREE.Group;
   kind: Kind;
@@ -432,6 +440,10 @@ function buildSaurolisk(material: THREE.Material): { root: THREE.Group; parts: M
 
 export class Enemies {
   private readonly mobs: Mob[] = [];
+  private readonly gibs: Gib[] = [];
+  /** One shared gib cube and one cached tinted material per kind. */
+  private readonly gibGeometry = new THREE.BoxGeometry(.14, .14, .14);
+  private readonly gibMaterials = new Map<Kind, THREE.MeshBasicMaterial>();
   private spawnTimer = 5;
   /** Monotonically increasing clock used for the idle/breathing animation. */
   private simTime = 0;
@@ -539,6 +551,7 @@ export class Enemies {
     dt = Math.min(.05, Math.max(0, dt));
     this.spawnTimer -= dt;
     this.simTime += dt;
+    this.updateGibs(dt);
 
     if (this.spawnTimer <= 0) {
       this.spawnTimer = biome === 'overcast' ? 10 : 6;
@@ -766,9 +779,10 @@ export class Enemies {
     mob.hitFlash = HIT_FLASH_TIME;
     for (const mesh of mob.meshes) mesh.material = this.flashMaterials[mob.kind];
     if (mob.hp <= 0) {
-      // Start the death animation instead of vanishing, and report the kill so
-      // the caller can drop loot where the mob fell.
+      // Start the death animation instead of vanishing: a burst of the
+      // creature's own shell/ hide chunks sprays out as it goes.
       mob.dying = DEATH_TIME;
+      this.spawnGibs(mob);
       const flash = this.flashMaterials[mob.kind];
       for (const mesh of mob.meshes) mesh.material = flash;
       onKill?.(mob.root.position.clone(), mob.kind);
@@ -778,8 +792,94 @@ export class Enemies {
     return true;
   }
 
+  /**
+   * The beam weapon carving creatures: continuous DPS along the aimed ray,
+   * stopping at the first body it meets. Returns the distance to the struck
+   * creature this frame, or -1 when the ray meets only terrain — the caller
+   * clamps the beam's reach to that distance, so a body blocks whatever was
+   * mined behind it and the visual trace ends at the impact point.
+   */
+  beamCut(origin: THREE.Vector3, direction: THREE.Vector3, range: number, dps: number, dt: number, onKill?: (position: THREE.Vector3, kind: Kind) => void): number {
+    const dir = direction.clone().normalize();
+    let best = -1, bestDist = Infinity;
+    for (let i = 0; i < this.mobs.length; i++) {
+      const mob = this.mobs[i];
+      if (mob.dying > 0) continue;
+      const center = mob.root.position.clone().add(new THREE.Vector3(0, mob.kind === 'crawler' ? .5 : mob.kind === 'cresthorn' ? 2.1 : mob.kind === 'saurolisk' ? 1.2 : 1, 0));
+      const delta = center.sub(origin), along = delta.dot(dir);
+      if (along < 0 || along > range || along >= bestDist) continue;
+      if (delta.addScaledVector(dir, -along).length() > .8) continue;
+      best = i; bestDist = along;
+    }
+    if (best < 0) return -1;
+    const mob = this.mobs[best];
+    mob.hp -= dps * dt;
+    mob.hitFlash = HIT_FLASH_TIME;
+    for (const mesh of mob.meshes) mesh.material = this.flashMaterials[mob.kind];
+    if (mob.hp <= 0) {
+      // Same death as any killing blow: shrink-sink animation plus the gore burst.
+      mob.dying = DEATH_TIME;
+      this.spawnGibs(mob);
+      const flash = this.flashMaterials[mob.kind];
+      for (const mesh of mob.meshes) mesh.material = flash;
+      onKill?.(mob.root.position.clone(), mob.kind);
+    }
+    return bestDist;
+  }
+
+  /** Anatomy-tinted gore burst at the point of death. */
+  private spawnGibs(mob: Mob): void {
+    const material = this.gibMaterial(mob.kind);
+    for (let i = 0; i < 7; i++) {
+      const mesh = new THREE.Mesh(this.gibGeometry, material);
+      mesh.position.copy(mob.root.position)
+        .add(new THREE.Vector3((Math.random() - .5) * .6, .5 + Math.random() * .9, (Math.random() - .5) * .6));
+      this.scene.add(mesh);
+      this.gibs.push({
+        mesh,
+        vx: (Math.random() - .5) * 4, vy: 2.5 + Math.random() * 3, vz: (Math.random() - .5) * 4,
+        spinX: (Math.random() - .5) * 12, spinZ: (Math.random() - .5) * 12,
+        life: .6 + Math.random() * .3,
+      });
+    }
+  }
+
+  /** One darkened chunk material per kind, built lazily and shared. */
+  private gibMaterial(kind: Kind): THREE.MeshBasicMaterial {
+    let material = this.gibMaterials.get(kind);
+    if (!material) {
+      material = new THREE.MeshBasicMaterial({ color: this.materials[kind].color.clone().multiplyScalar(.8) });
+      this.gibMaterials.set(kind, material);
+    }
+    return material;
+  }
+
+  /** Steps the gib physics: fall, tumble, bounce off terrain, fade small. */
+  private updateGibs(dt: number): void {
+    for (let i = this.gibs.length - 1; i >= 0; i--) {
+      const gib = this.gibs[i];
+      gib.life -= dt;
+      if (gib.life <= 0) { this.scene.remove(gib.mesh); this.gibs.splice(i, 1); continue; }
+      gib.vy -= 16 * dt;
+      const p = gib.mesh.position;
+      p.x += gib.vx * dt; p.y += gib.vy * dt; p.z += gib.vz * dt;
+      if (gib.vy < 0 && this.world.get(p.x, p.y - .05, p.z) !== Block.Air) {
+        p.y = Math.floor(p.y) + .07;
+        gib.vy *= -.35; gib.vx *= .6; gib.vz *= .6;
+        gib.spinX *= .6; gib.spinZ *= .6;
+      }
+      gib.mesh.rotation.x += gib.spinX * dt;
+      gib.mesh.rotation.z += gib.spinZ * dt;
+      gib.mesh.scale.setScalar(Math.min(1, gib.life * 3.5));
+    }
+  }
+
+  count(): number { return this.mobs.length; }
+
   clear(): void {
     for (let i = this.mobs.length - 1; i >= 0; i--) this.remove(i);
+    for (const gib of this.gibs) this.scene.remove(gib.mesh);
+    this.gibs.length = 0;
     this.spawnTimer = 5;
   }
 
@@ -787,6 +887,9 @@ export class Enemies {
     this.clear();
     for (const mat of Object.values(this.materials)) mat.dispose();
     for (const mat of Object.values(this.flashMaterials)) mat.dispose();
+    this.gibGeometry.dispose();
+    for (const mat of this.gibMaterials.values()) mat.dispose();
+    this.gibMaterials.clear();
     EYES_MATERIAL.dispose();
     CORE_MATERIAL.dispose();
     AMBER_MATERIAL.dispose();

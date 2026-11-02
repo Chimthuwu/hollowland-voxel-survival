@@ -12,12 +12,17 @@ button { font: inherit; }
 .vitals { display: grid; gap: 8px; }
 .vital { display: flex; align-items: center; gap: 12px; }
 .vital-label { width: 65px; color: #bcb5aa; font-size: 9px; letter-spacing: .09em; }
-.vital-track { width: 120px; height: 3px; background: #ffffff24; }
+/* Segmented arcade bars: a tick overlay reads the bar in hard cells. */
+.vital-track { position: relative; width: 120px; height: 7px; background: #ffffff24; border: 1px solid #ffffff2b; }
+.vital-track::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 13px, #0009 13px 15px); pointer-events: none; }
 .vital-fill { display: block; width: 100%; height: 100%; background: #b75d55; transition: width .18s ease; }
 .vital-sanity .vital-fill { background: #a58bb6; }
 .vital-stamina .vital-fill { background: #b9b196; }
 .world-info { position: absolute; top: 32px; right: 32px; max-width: 35vw; color: #d4ccc0; font-size: 11px; text-align: right; line-height: 1.7; }
-.crosshair { position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; border: 1px solid #f4e8d6; border-radius: 50%; box-shadow: 0 0 5px #000; transform: translate(-50%,-50%); }
+/* Pixel-arcade crosshair: a hard chunky plus instead of a soft dot. */
+.crosshair { position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; transform: translate(-50%,-50%); }
+.crosshair::before { content: ''; position: absolute; left: 3px; top: -3px; width: 2px; height: 14px; background: #f4e8d6; box-shadow: 0 0 4px #000; }
+.crosshair::after { content: ''; position: absolute; top: 3px; left: -3px; width: 14px; height: 2px; background: #f4e8d6; box-shadow: 0 0 4px #000; }
 .resume-hint { position: absolute; left: 50%; bottom: 103px; transform: translateX(-50%); padding: 8px 12px; color: #d8c7af; background: #111214cf; font-size: 9px; letter-spacing: .06em; white-space: nowrap; }
 .toast { position: absolute; left: 50%; bottom: 148px; transform: translateX(-50%); padding: 9px 16px; color: #f0e4cd; background: #1a1720e0; border: 1px solid #b2a28b55; font-size: 10px; letter-spacing: .12em; white-space: nowrap; }
 .hotbar { position: absolute; left: 50%; bottom: 27px; display: flex; gap: 4px; transform: translateX(-50%); }
@@ -25,11 +30,22 @@ button { font: inherit; }
 .slot:hover, .slot:focus-visible { border-color: #e1cead; }
 .slot.selected { border-color: #dfc7a4; background: #282622eb; box-shadow: 0 0 0 1px #dfc7a44a, 0 0 16px #d3ab6c22; }
 .slot-key { position: absolute; top: 3px; left: 5px; color: #a69e93; font-size: 9px; }
-.slot-icon { position: absolute; left: 18px; top: 15px; width: 22px; height: 22px; background: #6e665e; border: 1px solid #ffffff38; box-shadow: inset -5px -5px 0 #0004; transform: rotate(-3deg); }
-.block-1 { background: #706758; } .block-2 { background: #777880; } .block-3 { background: #6e4d3f; }
-.block-4 { background: #4b4e4c; } .block-5 { background: #a249a7; } .block-6 { background: #b25764; }
-.block-7 { background: #cbbda7; } .block-8 { background: #eab36c; box-shadow: 0 0 9px #eaa14a88; }
-.block-9 { background: #8a785e; } .block-10 { background: #9d5a52; } .block-11 { background: #3e393b; }
+/* --- Pixel-arcade HUD -----------------------------------------------------
+   Chunky, hard-edged, dithered: every slot icon is a stepped-bevel pixel chip
+   in its world colour (per block enum id), so what you mine is what you see. */
+.slot-icon { position: absolute; left: 18px; top: 15px; width: 22px; height: 22px; background: #6e665e; border: 1px solid #00000088; box-shadow: inset 4px 4px 0 #ffffff2e, inset -5px -5px 0 #00000055; image-rendering: pixelated; }
+.slot-icon::after { content: ''; position: absolute; inset: 0; background: repeating-conic-gradient(#0000001f 0% 25%, transparent 0% 50%) 0 0 / 4px 4px; pointer-events: none; }
+.block-1 { background: #8a5a4e; } .block-2 { background: #555761; } .block-3 { background: #4a3935; }
+.block-4 { background: #373a3c; } .block-5 { background: #c02dd4; } .block-6 { background: #c4545f; }
+.block-7 { background: #beb09b; } .block-8 { background: #eab36c; box-shadow: 0 0 9px #eaa14a88, inset 4px 4px 0 #ffffff2e, inset -5px -5px 0 #00000055; }
+.block-9 { background: #6e6355; } .block-10 { background: #7b423e; } .block-11 { background: #28252a; }
+.block-12 { background: #6fe0d0; } .block-13 { background: #c7b3ff; } .block-14 { background: #8fe6c0; }
+.block-15 { background: #c4f23a; } .block-16 { background: #7fa668; } .block-17 { background: #6fc4ff; box-shadow: 0 0 8px #6fc4ff77, inset 4px 4px 0 #ffffff2e, inset -5px -5px 0 #00000055; }
+.block-18 { background: #d88f7a; } .block-19 { background: #9aa3b0; } .block-20 { background: #8c93a3; }
+.block-21 { background: #9a8f80; } .block-22 { background: #9fb4c4; } .block-23 { background: #b87333; }
+.block-24 { background: #c7b3ff; } .block-25 { background: #9980c6; }
+.block-26 { background: #9ab58e; } .block-27 { background: #d9d2ec; } .block-28 { background: #93735f; }
+.block-29 { background: #e4dcc4; } .block-30 { background: #f0ece2; }
 .slot-name { position: absolute; bottom: 4px; left: 4px; max-width: 39px; overflow: hidden; color: #c4b9aa; font-size: 7px; text-transform: uppercase; white-space: nowrap; }
 .slot-count { position: absolute; right: 4px; bottom: 3px; font-size: 10px; }
 .menu-panel { position: absolute; left: 50%; top: 50%; width: min(490px, calc(100vw - 32px)); max-height: calc(100vh - 145px); padding: 30px 34px; overflow: auto; border: 1px solid #b2a28b66; background: #111214f2; box-shadow: 0 16px 80px #000b; transform: translate(-50%, -55%); pointer-events: auto; }
@@ -40,9 +56,18 @@ button { font: inherit; }
 .recipes { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 20px; }
 .recipe { min-height: 67px; padding: 12px; border: 1px solid #a99d8c3d; background: #ffffff08; color: #e4dbcc; text-align: left; cursor: pointer; }
 .recipe:hover, .recipe:focus-visible { border-color: #d3b890; background: #cbb59318; }
+/* Craftability reads at a glance: gold when makeable now, dimmed when not. */
+.recipe.craftable { border-color: #c8a97a; background: #cbb59311; }
+.recipe.craftable strong { color: #f0e2c8; }
+.recipe.unaffordable { opacity: .62; }
 .recipe strong, .recipe span { display: block; }
 .recipe strong { font: 600 18px 'Cormorant Garamond', Georgia, serif; }
 .recipe span { margin-top: 4px; color: #ada195; font-size: 9px; }
+/* Live have/need chips: a pixel chip per ingredient and its count. */
+.recipe-cost { display: flex; gap: 7px; margin-top: 7px; }
+.ing { display: inline-block; width: 11px; height: 11px; border: 1px solid #00000088; box-shadow: inset 2px 2px 0 #ffffff26, inset -2px -2px 0 #0000004d; image-rendering: pixelated; }
+.ing-count { color: #8f857a; font-size: 9px; align-self: center; }
+.ing-count.have { color: #cdbb9b; }
 .screen-overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; pointer-events: auto; background: radial-gradient(ellipse at 50% 45%, #24211ee8 0%, #0a0c0ff7 68%); }
 .screen-overlay::before { position: absolute; inset: 0; border: 1px solid #a8917240; margin: 15px; content: ''; pointer-events: none; }
 .intro-card, .death-card { position: relative; width: min(620px, 100%); max-height: calc(100vh - 55px); overflow: auto; text-align: center; }

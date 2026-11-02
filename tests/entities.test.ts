@@ -18,8 +18,9 @@ describe('enemies', () => {
     enemies.spawn('overcast', new THREE.Vector3(0,0,-3));
     expect(enemies.attack(new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,-1),5,15)).toBe(true);
     expect(enemies.attack(new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,-1),5,15)).toBe(true);
-    // The mob now plays a short death animation before it is removed.
-    expect(scene.children).toHaveLength(1);
+    // The mob now plays a short death animation before it is removed, and the
+    // kill sprays 7 gib chunks alongside it.
+    expect(scene.children).toHaveLength(8);
     for (let i = 0; i < 60; i++) enemies.update(1/60, new THREE.Vector3(0,0,0), 'overcast', () => {});
     expect(scene.children).toHaveLength(0);
     expect(enemies.attack(new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,-1),5,15)).toBe(false);
@@ -53,5 +54,29 @@ describe('enemies', () => {
     const enemies = new Enemies(new THREE.Scene(), world); enemies.spawn('maw',new THREE.Vector3(0,0,4));
     expect(enemies.attack(new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,-1),5,100)).toBe(false);
     expect(enemies.attack(new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,1),2,100)).toBe(false);
+  });
+
+  it('beam-cut ticks flesh DPR and returns the struck creature distance; a miss returns -1', () => {
+    const scene = new THREE.Scene();
+    const enemies = new Enemies(scene, world);
+    enemies.spawn('overcast', new THREE.Vector3(0, 0, -3));
+    const origin = new THREE.Vector3(0, 1, 0);
+    const dir = new THREE.Vector3(0, 0, -1);
+    // Beam DPS over time: ~80 dps for just over one second of ticks kills the
+    // 30-vitality stalker, and the cut distance reads ~~3 m along the ray.
+    let kill: THREE.Vector3 | null = null;
+    let lastCut = -1;
+    for (let i = 0; i < 200 && !kill; i++) {
+      const cut = enemies.beamCut(origin, dir, 6, 80, 1 / 60, pos => kill = pos.clone());
+      if (cut >= 0) lastCut = cut;
+    }
+    expect(kill).not.toBeNull();
+    expect(lastCut).toBeGreaterThan(2.5);
+    expect(lastCut).toBeLessThanOrEqual(3.2);
+    // No flesh on the ray: only terrain is ahead, so beamCut reports no cut
+    // and a beam weapon one DPS-tick away from nothing behind it.
+    const enemies2 = new Enemies(new THREE.Scene(), world);
+    enemies2.spawn('overcast', new THREE.Vector3(4, 0, -3)); // off the aim line
+    expect(enemies2.beamCut(origin, dir, 6, 80, 1 / 60)).toBe(-1);
   });
 });

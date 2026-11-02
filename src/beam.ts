@@ -62,11 +62,15 @@ export class BeamWeapon {
     }
   }
 
-  /** Update once per frame. Returns the block that was broken this tick (if any). */
-  update(dt: number, origin: THREE.Vector3, direction: THREE.Vector3, maxRange: number, onBreak: (id: Block, x: number, y: number, z: number) => void, toolTier = 0): Block | null {
+  /** Update once per frame. Returns the block that was broken this tick (if any).
+   *  `rangeLimit` is an optional effective max reach for exactly this frame —
+   *  main.ts passes a struck creature's distance so the beam visually stops at
+   *  the body and its DPS applies to flesh instead of the stone behind it. */
+  update(dt: number, origin: THREE.Vector3, direction: THREE.Vector3, maxRange: number, onBreak: (id: Block, x: number, y: number, z: number) => void, toolTier = 0, rangeLimit = Infinity): Block | null {
     if (!this.mouseDown) return null;
 
-    const hit = this.world.raycast(origin, direction, maxRange);
+    const reach = Math.min(maxRange, rangeLimit);
+    const hit = this.world.raycast(origin, direction, reach);
     this.currentHit = hit ? new THREE.Vector3(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5) : null;
 
     // Target continuity: if the player looks at a different block, restart damage on the new one.
@@ -88,8 +92,9 @@ export class BeamWeapon {
       }
     }
 
-    // Render the beam visual.
-    const end = this.currentHit ?? origin.clone().add(direction.clone().multiplyScalar(maxRange));
+    // Render the beam visual: to the impact point, or to the clamped reach
+    // (a body cut short of any block) when the ray meets nothing.
+    const end = this.currentHit ?? origin.clone().add(direction.clone().multiplyScalar(reach));
     this.drawBeam(origin, end);
     return broken;
   }
