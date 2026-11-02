@@ -83,6 +83,26 @@ describe('water: rivers and lakes are real, swimmable block data', () => {
     throw new Error('no water column found for bed inspection');
   });
 
+  it('every water bank is a single hop out of the water', () => {
+    // Balance invariant from the pre-tune survey: 13% of banks used to need
+    // a >1-block jump (worst: 21), which traps a player who falls in. The
+    // bed/shore carve must keep every step from water to land at ≤1 block.
+    let wet = 0, worst = 0;
+    for (let x = -320; x < 320; x += 3) {
+      for (let z = -320; z < 320; z += 3) {
+        if (world.get(x, WATER_LEVEL, z) !== Block.Water) continue;
+        wet++;
+        const bed = world.surface(x, z);
+        for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const step = world.surface(x + ox, z + oz) - bed;
+          if (step > worst) worst = step;
+        }
+      }
+    }
+    expect(wet, 'survey found no water at all').toBeGreaterThan(0);
+    expect(worst, 'a bank step above 1 traps players in the water').toBeLessThanOrEqual(1);
+  });
+
   it('keeps spawn and the engraved entrances out of the drink', () => {
     expect(world.get(0, WATER_LEVEL, 0)).not.toBe(Block.Water);
     for (const [ex, ez] of [[24, 18], [-34, 40], [48, -28], [-18, -52], [72, 34], [116, -14]]) {

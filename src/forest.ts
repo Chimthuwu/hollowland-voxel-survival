@@ -102,8 +102,10 @@ function trunkRadiusAt(tree: TreeShape, ly: number, dy: number, dz: number): num
     const skirt = ly === 0 ? 1 : ly === 1 ? .62 : .32;
     r += (0.7 + hash(tree.tx * 2.1 + dy, tree.tz * 1.9 + dz) * .4) * skirt;
   } else {
-    // Bark grooves, rotating slowly with height so ridges spiral a little.
-    r += Math.sin(Math.atan2(dz, dy) * 3 + tree.leanSeed * 9 + ly * .35) * .07;
+    // Bark grooves: four rotating ribs around the girth so the trunk reads
+    // as ridged wood, not a smooth round blob. The phase drifts with height
+    // so the ridges spiral gently up the trunk.
+    r += Math.sin(Math.atan2(dz, dy) * 4 + tree.leanSeed * 11 + ly * .5) * .14;
   }
   return r;
 }
@@ -115,8 +117,9 @@ export function isTrunkCell(tree: TreeShape, x: number, y: number, z: number): b
   const dx = x - tree.tx - shiftAt(tree, ly);
   const dz = z - tree.tz;
   const r = trunkRadiusAt(tree, ly, dx, dz);
-  // Quantised edge wobble keeps trunk silhouettes organic instead of round blobs.
-  const wob = (hash3(tree.tx + dx, y, tree.tz + dz) - .5) * .34;
+  // Subtle, deterministic edge wobble keeps silhouettes organic without
+  // turning trunks into random amorphous shapes.
+  const wob = (hash3(tree.tx + dx, y, tree.tz + dz) - .5) * .22;
   return dx * dx + dz * dz <= r * r + wob;
 }
 
@@ -291,22 +294,24 @@ export function collectTrees(
 // --- Tinting ----------------------------------------------------------------
 
 const LEAF_COLORS: Record<Biome, { base: [number, number, number]; accent: [number, number, number] }> = {
-  overcast:  { base: [.60, .50, .78], accent: [.74, .66, .90] },
-  storm:     { base: [.10, .13, .11], accent: [.14, .16, .14] },
-  glitch:    { base: [.50, .22, .55], accent: [.35, .90, .82] },
-  psychosis: { base: [.55, .14, .19], accent: [.72, .28, .25] },
-  maw:       { base: [.52, .15, .17], accent: [.82, .38, .32] },
+  overcast:  { base: [.52, .42, .82], accent: [.70, .58, .96] },
+  storm:     { base: [.08, .11, .09], accent: [.12, .14, .12] },
+  glitch:    { base: [.55, .26, .60], accent: [.40, .95, .88] },
+  psychosis: { base: [.58, .16, .21], accent: [.78, .30, .28] },
+  maw:       { base: [.55, .17, .19], accent: [.86, .40, .34] },
   catacombs:  { base: [.5, .5, .5], accent: [.5, .5, .5] },
   veins:      { base: [.5, .5, .5], accent: [.5, .5, .5] },
   sky:        { base: [.5, .5, .5], accent: [.5, .5, .5] },
 };
 
+/** Trunk colours: warm, earthy wood tones that read clearly against the
+ *  canopy of every species. Bark is never the same hue as the leaves. */
 const TRUNK_COLORS: Record<Biome, [number, number, number]> = {
-  overcast:  [.40, .40, .42],
-  storm:     [.17, .14, .115],
-  glitch:    [.28, .20, .26],
-  psychosis: [.71, .66, .58],
-  maw:       [.48, .23, .25],
+  overcast:  [.52, .42, .30],
+  storm:     [.24, .18, .13],
+  glitch:    [.32, .24, .28],
+  psychosis: [.72, .66, .58],
+  maw:       [.52, .26, .22],
   catacombs:  [.5, .5, .5], veins: [.5, .5, .5], sky: [.5, .5, .5],
 };
 
@@ -321,8 +326,10 @@ export function leafTint(tree: TreeShape, x: number, y: number, z: number, accen
  *  reads as layered wood instead of one flat grey. */
 export function trunkTint(tree: TreeShape, y: number): [number, number, number] {
   const c = TRUNK_COLORS[tree.biome];
-  const band = .9 + hash3(tree.tx, Math.floor(y / 2), tree.tz) * .2;
-  const grain = .975 + hash3(tree.tx + y * .31, y, tree.tz) * .05;
+  // Stronger horizontal growth bands plus fine vertical grain, so bark reads
+  // as layered wood instead of flat colour.
+  const band = .85 + hash3(tree.tx, Math.floor(y / 2), tree.tz) * .3;
+  const grain = .95 + hash3(tree.tx + y * .31, y, tree.tz) * .1;
   const j = band * grain;
   return [c[0] * j, c[1] * j, c[2] * j];
 }

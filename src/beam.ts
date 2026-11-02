@@ -40,7 +40,7 @@ export class BeamWeapon {
     this.world = world;
     this.camera = camera;
 
-    this.lineMaterial = new THREE.MeshBasicMaterial({ color: 0xb6f3ff, transparent: true, opacity: 0, depthWrite: false });
+    this.lineMaterial = new THREE.MeshBasicMaterial({ color: 0x8fffe0, transparent: true, opacity: 0, depthWrite: false });
     // Unit cylinder along +Y; we scale it to span camera->hit per frame.
     const geo = new THREE.CylinderGeometry(0.025, 0.025, 1, 6, 1, true);
     geo.translate(0, 0.5, 0);
@@ -52,6 +52,10 @@ export class BeamWeapon {
 
   /** Whether the beam is currently held down. */
   isActive(): boolean { return this.mouseDown; }
+
+  /** The block currently being melted by the beam, or null. Used for damage
+   *  visualization (cracks) on the targeted block. */
+  targeted(): BeamTarget | null { return this.target; }
 
   setMouse(down: boolean): void {
     this.mouseDown = down;
@@ -66,7 +70,7 @@ export class BeamWeapon {
    *  `rangeLimit` is an optional effective max reach for exactly this frame —
    *  main.ts passes a struck creature's distance so the beam visually stops at
    *  the body and its DPS applies to flesh instead of the stone behind it. */
-  update(dt: number, origin: THREE.Vector3, direction: THREE.Vector3, maxRange: number, onBreak: (id: Block, x: number, y: number, z: number) => void, toolTier = 0, rangeLimit = Infinity): Block | null {
+  update(dt: number, origin: THREE.Vector3, direction: THREE.Vector3, maxRange: number, onBreak: (id: Block, x: number, y: number, z: number) => void, toolTier = 0, level = 1, rangeLimit = Infinity): Block | null {
     if (!this.mouseDown) return null;
 
     const reach = Math.min(maxRange, rangeLimit);
@@ -83,7 +87,7 @@ export class BeamWeapon {
 
     let broken: Block | null = null;
     if (this.target) {
-      this.target.health -= beamDps(toolTier) * dt;
+      this.target.health -= beamDps(toolTier, level) * dt;
       if (this.target.health <= 0) {
         broken = this.target.id;
         this.world.set(this.target.x, this.target.y, this.target.z, Block.Air);

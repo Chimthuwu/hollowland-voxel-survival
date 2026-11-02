@@ -1,11 +1,13 @@
 import { Block, type Biome } from './world';
 import type { KnapTool } from './knappingCore';
 import { TIER_DURABILITY } from './tools';
+import { CRAFT_XP, smeltRecipeFor, xpForLevel } from './forge';
 
 export type Recipe =
   | 'torch' | 'weapon' | 'scaffold' | 'totem' | 'beam' | 'chisel'
   | 'knapPick' | 'knapAxe' | 'knapBlade'
-  | 'plate' | 'clawShiv' | 'hideGuard' | 'bandage';
+  | 'plate' | 'clawShiv' | 'hideGuard' | 'bandage'
+  | 'smeltCopper' | 'smeltCrystal' | 'smeltEcho';
 export type InventorySlot = { id: Block; count: number };
 
 // Ingredient amounts are kept here so they can be tuned without changing the UI.
@@ -25,6 +27,9 @@ export const RECIPES: Record<Recipe, { name: string; description: string; cost: 
   clawShiv: { name: 'Claw shiv', description: '2 claws + 1 wood — adds a bonus to every melee hit (stacks to +12)', cost: [[Block.Claw, 2], [Block.Wood, 1]] },
   hideGuard: { name: 'Hide guard', description: '4 hide + 1 silk — halves hazard damage (flesh, acid, lightning)', cost: [[Block.Hide, 4], [Block.Silk, 1]] },
   bandage: { name: 'Bandage', description: '2 silk — right-click or F to restore 25 vitality', cost: [[Block.Silk, 2]] },
+  smeltCopper: { name: 'Copper bar', description: '1 copper ore + 1 wood — smelt copper into a bar', cost: [[Block.CopperOre, 1], [Block.Wood, 1]] },
+  smeltCrystal: { name: 'Crystal bar', description: '1 crystal + 2 wood — smelt crystal into a bar', cost: [[Block.Crystal, 1], [Block.Wood, 2]] },
+  smeltEcho: { name: 'Echo bar', description: '1 echo gem + 3 wood — smelt echo gem into a bar', cost: [[Block.EchoGem, 1], [Block.Wood, 3]] },
 };
 
 /** The knapping recipes, and the tool head each one produces. */
@@ -51,6 +56,7 @@ const NAMES: Record<number, string> = {
   [Block.Chitin]: 'Chitin plate', [Block.Silk]: 'Silk fibre', [Block.Hide]: 'Dinosaur hide',
   [Block.Claw]: 'Claw', [Block.Bandage]: 'Bandage',
   [Block.Sand]: 'Sand', [Block.Snow]: 'Snow', [Block.Water]: 'Water',
+  [Block.CopperBar]: 'Copper bar', [Block.CrystalBar]: 'Crystal bar', [Block.EchoBar]: 'Echo bar',
 };
 
 /**
@@ -73,6 +79,9 @@ const DESCRIPTIONS: Record<number, string> = {
   [Block.Crystal]: 'mine it deeper down; crafts the beam weapon',
   [Block.CopperOre]: 'shallow ore — first of the metal tiers',
   [Block.EchoGem]: 'rare deep gem — the strongest future gear',
+  [Block.CopperBar]: 'refined copper — craft into reinforced gear',
+  [Block.CrystalBar]: 'refined crystal — focuses the beam laser',
+  [Block.EchoBar]: 'refined echo gem — highest-tier crafting',
   [Block.Skyfruit]: 'dropped by pale trees and felling; a rare find',
   [Block.Morsel]: 'raw creature meat; heavier kills drop more',
   [Block.Scorched]: 'lightning-charred wood',
@@ -128,6 +137,31 @@ export class Inventory {
    * its mining/damage effect.
    */
   toolTier = 0;
+
+  /** Player level (1-based). Crafting and smelting award XP; each level makes
+   *  the beam weapon bite harder. */
+  level = 1;
+  /** XP toward the next level. */
+  xp = 0;
+
+  /** XP needed to reach the next level from the current one. */
+  xpForNext(): number { return xpForLevel(this.level + 1) - xpForLevel(this.level); }
+
+  /**
+   * Awards XP and returns the new level when a threshold is crossed.
+   * Levels stack: gaining enough XP for multiple levels at once applies all.
+   */
+  addXP(amount: number): { leveled: boolean; level: number } {
+    if (amount <= 0) return { leveled: false, level: this.level };
+    this.xp += amount;
+    let leveled = false;
+    while (this.xp >= xpForLevel(this.level + 1)) {
+      this.xp -= xpForLevel(this.level + 1);
+      this.level += 1;
+      leveled = true;
+    }
+    return { leveled, level: this.level };
+  }
 
   /** Raises the recorded tool tier when a head is knapped better. */
   recordToolTier(quality: 'fine' | 'good' | 'rough' | 'broken'): void {
@@ -249,8 +283,19 @@ export class Inventory {
       case 'bandage':
         success = trial.remove(Block.Silk, 2) && trial.add(Block.Bandage, 1);
         break;
+      case 'smeltCopper':
+        success = trial.remove(Block.CopperOre, 1) && trial.remove(Block.Wood, 1) && trial.add(Block.CopperBar, 1);
+        break;
+      case 'smeltCrystal':
+        success = trial.remove(Block.Crystal, 1) && trial.remove(Block.Wood, 2) && trial.add(Block.CrystalBar, 1);
+        break;
+      case 'smeltEcho':
+        success = trial.remove(Block.EchoGem, 1) && trial.remove(Block.Wood, 3) && trial.add(Block.EchoBar, 1);
+        break;
     }
     if (!success) return false;
+    const gained = CRAFT_XP[recipe];
+    if (gained) this.addXP(gained);
     this.slots = trial.slots;
     this.selected = trial.selected;
     this.weapon = trial.weapon;
@@ -259,6 +304,23 @@ export class Inventory {
     this.hideGuarded = trial.hideGuarded;
     this.edgeBonus = trial.edgeBonus;
     return true;
+  }
+
+  /**
+   * Smelt an ore into its bar, consuming wood fuel. Returns the bar block and
+   * XP awarded, or null when the player lacks the ore or fuel. Callers handle
+   * audio/toasts and applying the resulting block to the world.
+   */
+  smelt(inputId: Block): { output: Block; xp: number } | null {
+    const recipe = smeltRecipeFor(inputId);
+    if (!recipe) return null;
+    if (this.count(recipe.input) < 1) return null;
+    if (this.count(Block.Wood) < recipe.fuel) return null;
+    this.remove(recipe.input, 1);
+    this.remove(Block.Wood, recipe.fuel);
+    this.add(recipe.output, 1);
+    const gained = this.addXP(recipe.xp);
+    return { output: recipe.output, xp: recipe.xp };
   }
 }
 

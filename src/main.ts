@@ -10,7 +10,7 @@ import { Player } from './player';
 import { Avatar } from './avatar';
 import { dayPhase, daylightLevel, nearbyLight, shadeAt, timeOfDayLabel } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
-import { beamDps, canBreak, effectiveTier, meleeDamage } from './tools';
+import { beamDps, canBreak, effectiveTier, meleeDamage, miningSpec, toolDps } from './tools';
 import { Pickups } from './pickups';
 import { Timber } from './timber';
 import { BeamWeapon } from './beam';
@@ -113,6 +113,11 @@ let health=100, sanity=100, stamina=100, yaw=0, pitch=0, gravity=1, thirdPerson=
 let time=0, gravityTimer=0, lightningTimer=6, flashTimer=0, effectTimer=0, invertTimer=0, footsteps=0, lastImpact=0, hookMessage='';
 // Screen shake from felled trees hitting the ground: decays over half a second.
 let shakeTimer = 0;
+// Hold-to-mine state: left click damages a block over time instead of
+// removing it instantly. Soft blocks (dirt, wood, leaves…) still break at once.
+let leftMouseDown = false;
+let mineTarget: { x: number; y: number; z: number; id: Block; health: number } | null = null;
+let mineDamage = 0;
 // Canopy-gloom level: smoothed 0..~.55 darkness applied while the player
 // stands in genuine shade (under a canopy or any cover outdoors).
 let gloomLevel = 0;
@@ -149,6 +154,10 @@ highlight.visible = false; scene.add(highlight);
 const cellGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
 const cellOutline = new THREE.LineSegments(cellGeo, new THREE.LineBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: .95 }));
 cellOutline.visible = false; scene.add(cellOutline);
+// Crack overlay on the block currently being mined: brightens as damage mounts.
+const crackGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.003, 1.003, 1.003));
+const crack = new THREE.LineSegments(crackGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthTest: true }));
+crack.visible = false; scene.add(crack);
 function lock(){ if(started && !dead && !menuOpen) renderer.domElement.requestPointerLock(); }
 ui.startButton.addEventListener('click',()=>{started=true;ui.setStarted(true);audio.start();lock();});
 renderer.domElement.addEventListener('click',()=>{if(started && !menuOpen && !dead && !document.pointerLockElement)lock();});
@@ -185,6 +194,7 @@ renderer.domElement.addEventListener('mousedown',e=>{
   camera.getWorldDirection(aimDirection); const hit=world.raycast(origin,aimDirection,6);
   const holdingChisel=inventory.selectedItem()?.id===Block.Chisel;
   if(e.button===0){
+    leftMouseDown = true;
     if(inventory.beam){
       beam.setMouse(true);
       return;
@@ -222,11 +232,21 @@ renderer.domElement.addEventListener('mousedown',e=>{
       const tier=effectiveTier(inventory.toolTier,inventory.beam);
       const gate=canBreak(hit.id,tier);
       if(!gate.ok){ui.toast(gate.reason);return;}
-      if(inventory.add(hit.id)){
-        world.set(hit.x,hit.y,hit.z,Block.Air);chisel.clear(hit.x,hit.y,hit.z);audio.event('break');
-        // Chopping into a trunk (or under it) can be the cut that fells the whole tree.
-        timber.notify(hit.x,hit.y,hit.z,player.position);
-        if(tier>0&&!inventory.beam){if(inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');}
+      const spec = miningSpec(hit.id);
+      // Tree trunks take sustained chopping to fell — a tree only topples when
+      // its base trunk cell is actually broken. Placed soft blocks (dirt,
+      // grass, wood planks, leaves…) still break at once.
+      const isTrunk = world.isTreeTrunk(hit.x, hit.y, hit.z);
+      const soft = spec.soft && !isTrunk;
+      if(soft){
+        if(inventory.add(hit.id)){
+          world.set(hit.x,hit.y,hit.z,Block.Air);chisel.clear(hit.x,hit.y,hit.z);audio.event('break');
+          timber.notify(hit.x,hit.y,hit.z,player.position);
+          if(tier>0&&!inventory.beam){if(inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');}
+        }
+      } else {
+        mineTarget = { x: hit.x, y: hit.y, z: hit.z, id: hit.id, health: spec.hardness };
+        mineDamage = 0;
       }
     }
   } else if(e.button===2){
@@ -252,7 +272,13 @@ renderer.domElement.addEventListener('mousedown',e=>{
       if(item && item.count>0 && item.id!==Block.Chisel && !overlapsPlayer(p.x,p.y,p.z) && world.get(p.x,p.y,p.z)===Block.Air){world.set(p.x,p.y,p.z,item.id);inventory.remove(item.id,1);}}
   }
 });
-renderer.domElement.addEventListener('mouseup',e=>{if(e.button===0)beam.setMouse(false);});
+renderer.domElement.addEventListener('mouseup',e=>{
+  if(e.button===0){
+    beam.setMouse(false);
+    leftMouseDown = false;
+    if(mineTarget){ mineTarget = null; mineDamage = 0; crack.visible = false; }
+  }
+});
 // Every lethal hit names itself on the death screen, so a player who dies
 // underground immediately knows what did it (fall, enemy, storm or hazard).
 const DEATH_CAUSES: Record<DamageSource, string> = {
@@ -349,6 +375,56 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
         else cellOutline.visible=false;
       } else cellOutline.visible=false;
     } else {highlight.visible=false;cellOutline.visible=false;}
+
+    // Hold-to-mine: sustained left-click damages a block over time; the time
+    // to break depends on the block hardness and the tool tier, so stone and
+    // ore take longer with weaker tools. Soft blocks break instantly on click.
+    if(leftMouseDown && !inventory.beam){
+      const tier = effectiveTier(inventory.toolTier, false);
+      const t = mineTarget;
+      if(t && look && look.x===t.x && look.y===t.y && look.z===t.z){
+        mineDamage += toolDps(tier) * dt;
+        const ratio = Math.min(1, mineDamage / t.health);
+        crack.visible = true;
+        crack.position.set(t.x+.5, t.y+.5, t.z+.5);
+        (crack.material as THREE.LineBasicMaterial).opacity = ratio;
+        if(mineDamage >= t.health){
+          if(inventory.add(t.id)){
+            world.set(t.x,t.y,t.z,Block.Air);
+            chisel.clear(t.x,t.y,t.z);
+            audio.event('break');
+            timber.notify(t.x,t.y,t.z,player.position);
+            if(tier>0){if(inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');}
+          }
+          mineTarget = null; mineDamage = 0; crack.visible = false;
+        }
+      } else {
+        mineTarget = null; mineDamage = 0; crack.visible = false;
+        if(look){
+          const gate = canBreak(look.id, tier);
+          if(gate.ok && !miningSpec(look.id).soft){
+            mineTarget = { x: look.x, y: look.y, z: look.z, id: look.id, health: miningSpec(look.id).hardness };
+            mineDamage = 0;
+          }
+        }
+      }
+    } else if(!inventory.beam){
+      crack.visible = false;
+    }
+
+    // Beam target damage visualization: cracks brighten as the beam melts a block.
+    if(inventory.beam && beam.isActive()){
+      const b = beam.targeted();
+      if(b){
+        const spec = miningSpec(b.id);
+        const ratio = Math.min(1, Math.max(0, (spec.hardness - b.health) / spec.hardness));
+        crack.visible = true;
+        crack.position.set(b.x+.5, b.y+.5, b.z+.5);
+        (crack.material as THREE.LineBasicMaterial).opacity = ratio;
+      } else {
+        crack.visible = false;
+      }
+    }
     ui.tick(dt);
     camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));camera.position.add(back);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
     // Felled-tree impact: position jitter plus a slight roll kick, decaying fast
@@ -366,12 +442,12 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       // line at beam DPS. Its body then blocks the frame — reach is clamped to
       // the impact distance so the visual trace ends at the body and the stone
       // behind it only starts melting once the blood is done.
-      const cut=enemies.beamCut(eye,aimDirection,6,beamDps(3),dt,(pos,kind)=>{
+      const cut=enemies.beamCut(eye,aimDirection,6,beamDps(3,inventory.level),dt,(pos,kind)=>{
         const list=CREATURE_DROPS[kind]??[[Block.Morsel,1] as [Block,number]];
         for(const [id,n] of list)for(let i=0;i<n;i++)loot.spawn(id,pos.clone().setY(pos.y+.4),1);
       });
       if(cut>0&&Math.random()<dt*9)audio.event('hit');
-      beam.update(dt,eye,aimDirection,6,(id,x,y,z)=>{inventory.add(id);audio.event('break');timber.notify(x,y,z,player.position);if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier,cut>0?cut:Infinity);}
+      beam.update(dt,eye,aimDirection,6,(id,x,y,z)=>{inventory.add(id);audio.event('break');timber.notify(x,y,z,player.position);if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier,inventory.level,cut>0?cut:Infinity);}
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
     post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'&&!settings.reduceIntensity?1:0;post.uniforms.uPsy.value=Math.min(1.5,(activeBiome==='psychosis'&&!settings.reduceIntensity?1:0)+(phantomTimer>0?.45:0));
@@ -382,7 +458,7 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       const mat=phantom.material as THREE.MeshBasicMaterial;mat.opacity=Math.min(.55,.62*rise*Math.min(1,t*2.5+ .35));
       if(phantomTimer<=0)phantom.visible=false;
     }
-    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const toolStr=inventory.toolTier>0?`TOOL T${inventory.toolTier}${inventory.toolDurability>0?' ('+inventory.toolDurability+')':''} · `:'';const sel=inventory.selectedItem();const selStr=sel?` · ${itemLabel(sel.id)}`:'';const hookLabel=HOOKS[activeBiome].label;const info=powerStr+toolStr+timeOfDayLabel(dayPhase_)+' · '+(hookMessage||hookLabel)+selStr;
+    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const toolStr=inventory.toolTier>0?`TOOL T${inventory.toolTier}${inventory.toolDurability>0?' ('+inventory.toolDurability+')':''} · `:'';const lvlStr=`LVL ${inventory.level} · `;const sel=inventory.selectedItem();const selStr=sel?` · ${itemLabel(sel.id)}`:'';const hookLabel=HOOKS[activeBiome].label;const info=powerStr+lvlStr+toolStr+timeOfDayLabel(dayPhase_)+' · '+(hookMessage||hookLabel)+selStr;
     ui.update(health,sanity,stamina,activeBiome,info);
     overlay.recordFrame(dt);
     overlay.render(time,{x:p.x,y:p.y,z:p.z,vy:player.verticalVelocity,biome:activeBiome,health,sanity,stamina,gravity,impact:lastImpact});

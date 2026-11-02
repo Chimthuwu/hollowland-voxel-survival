@@ -101,6 +101,13 @@ export const TIER_DURABILITY: Record<number, number> = { 0: 0, 1: 60, 2: 120, 3:
  * Beam damage per second. A better knapped focus makes the beam bite harder,
  * so the knapping minigame keeps paying off after the beam is crafted.
  */
-export function beamDps(toolTier: number): number {
-  return Math.round(80 * (1 + 0.2 * Math.min(3, Math.max(0, toolTier))));
+export function beamDps(toolTier: number, level = 1): number {
+  return Math.round(80 * (1 + 0.2 * Math.min(3, Math.max(0, toolTier))) * (1 + 0.1 * Math.max(0, level - 1)));
+}
+
+/** Damage per second a swung hand tool deals to a block. Bare hands are the
+ *  floor; each tier bites noticeably harder so ore tiers gate progress time,
+ *  not just access. Soft blocks (dirt, wood, leaves…) still break instantly. */
+export function toolDps(tier: number): number {
+  return [10, 28, 56, 112][Math.min(3, Math.max(0, tier))];
 }
