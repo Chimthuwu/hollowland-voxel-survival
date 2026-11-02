@@ -63,10 +63,6 @@ function startPhantom(): void {
   phantom.visible = true;
 }
 const world = new World(scene);
-// Debug handle: expose the scene/world and an error log for remote inspection.
-(window as any).__dbg = { scene, world, errs: [] as string[] };
-window.addEventListener('error', e => (window as any).__dbg.errs.push('ERR ' + e.message));
-window.addEventListener('unhandledrejection', e => (window as any).__dbg.errs.push('REJ ' + e.reason));
 const enemies = new Enemies(scene,world);
 const critters = new Critters(scene,world);
 const chisel = new Chisel(world);

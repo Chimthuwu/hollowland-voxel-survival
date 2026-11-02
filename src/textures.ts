@@ -56,11 +56,12 @@ const LAYOUT: Record<number, [number, number] | null> = {
   [36]: [3, 5], // EchoBar
 };
 
+const CUR: [number, number] = [0, 0];
+
 function drawTile(ctx: CanvasRenderingContext2D, tx: number, ty: number, draw: (c: CanvasRenderingContext2D) => void): void {
-  const x = tx * TILE;
-  const y = ty * TILE;
+  CUR[0] = tx; CUR[1] = ty;
   ctx.save();
-  ctx.translate(x, y);
+  ctx.translate(tx * TILE, ty * TILE);
   draw(ctx);
   ctx.restore();
 }
@@ -73,7 +74,11 @@ function fillTile(ctx: CanvasRenderingContext2D, tx: number, ty: number, color: 
 }
 
 function addNoise(ctx: CanvasRenderingContext2D, r: number, g: number, b: number, amount: number): void {
-  const img = ctx.getImageData(0, 0, TILE, TILE);
+  // putImageData ignores the canvas transform, so address the tile absolutely
+  // via CUR (the tile drawTile is currently painting) — at (0,0) this used to
+  // stomp tile [0,0] and leave the active tile untouched.
+  const x0 = CUR[0] * TILE, y0 = CUR[1] * TILE;
+  const img = ctx.getImageData(x0, y0, TILE, TILE);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
     const n = (Math.random() - 0.5) * amount;
@@ -81,7 +86,7 @@ function addNoise(ctx: CanvasRenderingContext2D, r: number, g: number, b: number
     d[i + 1] = Math.min(255, Math.max(0, g + n));
     d[i + 2] = Math.min(255, Math.max(0, b + n));
   }
-  ctx.putImageData(img, 0, 0);
+  ctx.putImageData(img, x0, y0);
 }
 
 function speckles(ctx: CanvasRenderingContext2D, color: string, count: number, maxSize: number): void {
@@ -117,11 +122,40 @@ function leafMottle(ctx: CanvasRenderingContext2D): void {
   }
 }
 
+const BRIGHTNESS_TARGET = 236;
+
+function normalizeTileBrightness(ctx: CanvasRenderingContext2D): void {
+  for (let ty = 0; ty < ROWS; ty++) for (let tx = 0; tx < COLS; tx++) {
+    const img = ctx.getImageData(tx * TILE, ty * TILE, TILE, TILE);
+    const d = img.data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    const mean = sum / (d.length / 4);
+    if (mean < 4) continue; // untouched empty tile
+    const gain = BRIGHTNESS_TARGET / mean;
+    if (Math.abs(gain - 1) < 0.02) continue;
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = Math.min(255, d[i] * gain);
+      d[i + 1] = Math.min(255, d[i + 1] * gain);
+      d[i + 2] = Math.min(255, d[i + 2] * gain);
+    }
+    ctx.putImageData(img, tx * TILE, ty * TILE);
+  }
+}
+
 export function buildAtlas(): THREE.Texture {
   const canvas = document.createElement('canvas');
   canvas.width = ATLAS;
   canvas.height = ATLAS;
   const ctx = canvas.getContext('2d')!;
+
+  // Base-fill EVERY tile with neutral stone first: any LAYOUT tile without an
+  // explicit painter below used to stay transparent black (alpha 0) — water,
+  // sand and snow surfaces rendered as pure holes in the world.
+  for (let ty = 0; ty < ROWS; ty++) for (let tx = 0; tx < COLS; tx++) {
+    fillTile(ctx, tx, ty, '#555761');
+    addNoise(ctx, 0x55, 0x57, 0x61, 20);
+  }
 
   // ---- Dirt [1,0] ----
   fillTile(ctx, 1, 0, '#8a5a4e');
@@ -209,6 +243,15 @@ export function buildAtlas(): THREE.Texture {
   addNoise(ctx, 0xc7, 0xb3, 0xff, 18);
   speckles(ctx, '#ffffff', 25, 2);
 
+  // ---- Sand [6,4], Snow [7,4], Water [0,5] ----
+  fillTile(ctx, 6, 4, '#d8c8a0');
+  addNoise(ctx, 0xd8, 0xc8, 0xa0, 18);
+  speckles(ctx, '#c0b088', 35, 2);
+  fillTile(ctx, 7, 4, '#e8f0f4');
+  addNoise(ctx, 0xe8, 0xf0, 0xf4, 12);
+  fillTile(ctx, 0, 5, '#7fb8d8');
+  addNoise(ctx, 0x7f, 0xb8, 0xd8, 14);
+
   // Fill every unused tile with a neutral stone fallback so the atlas has no holes.
   for (let ty = 0; ty < ROWS; ty++) {
     for (let tx = 0; tx < COLS; tx++) {
@@ -220,6 +263,13 @@ export function buildAtlas(): THREE.Texture {
     }
   }
 
+  // Normalize per-tile brightness: the world shader multiplies this atlas by
+  // the vertex colour (which carries the block's palette), so the tiles must
+  // average near-white detail — tiles painted in the block's own colour get
+  // squared by the vertex tint and render near-black. Scale each tile so its
+  // mean luminance hits the target, keeping its grain and hue variation.
+  normalizeTileBrightness(ctx);
+
   const texture = new THREE.CanvasTexture(canvas);
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
@@ -229,10 +279,13 @@ export function buildAtlas(): THREE.Texture {
   return texture;
 }
 
-/** Atlas tile UV rect [u, v, width, height] for a block id, or null. */
+/** Atlas tile UV rect [u, v, width, height] for a block id, or null.
+ *  CanvasTexture flips Y (canvas top row = v 1), so a tile at row y occupies
+ *  v ∈ [1-(y+1)/ROWS, 1-y/ROWS] — not [y/ROWS, …]. Getting this wrong made
+ *  every block sample the mirrored row (grass tops landing on filler stone). */
 export function atlasUV(id: number): [number, number, number, number] | null {
   const t = LAYOUT[id];
   if (!t) return null;
   const [x, y] = t;
-  return [x / COLS, y / ROWS, 1 / COLS, 1 / ROWS];
+  return [x / COLS, 1 - (y + 1) / ROWS, 1 / COLS, 1 / ROWS];
 }

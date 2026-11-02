@@ -96,7 +96,22 @@ const MOUNTAIN_BAND = .68; // base field above this rises into peaks
  * mountain. A broad octave picks the region; a refining octave cuts the
  * borders up so transitions raggedly interlock instead of chessboarding.
  */
+/** Numeric map key for two signed coords — string keys showed up as a real
+ *  cost in profiles (thousands of `${x},${z}` concatenations per chunk). */
+const key2 = (x: number, z: number) => (x + 32768) * 65536 + (z + 32768);
+
 export function terrainKindAt(x: number, z: number): TerrainKind {
+  x = Math.floor(x); z = Math.floor(z);
+  const ck = key2(x, z);
+  const cached = terrainKindCache.get(ck);
+  if (cached !== undefined) return cached;
+  const out = terrainKindAtUncached(x, z);
+  if (terrainKindCache.size > 150_000) terrainKindCache.clear(); // bounded
+  terrainKindCache.set(ck, out);
+  return out;
+}
+const terrainKindCache = new Map<number, TerrainKind>();
+function terrainKindAtUncached(x: number, z: number): TerrainKind {
   const base = noise(x / GEO_SCALE + 71, z / GEO_SCALE + 71);
   const detail = noise(x / GEO_DETAIL + 133, z / GEO_DETAIL + 133);
   // Mountains and desert harden their edge where the detail octave agrees.
@@ -124,20 +139,39 @@ function treesAllowedAt(x: number, z: number) {
  * are broad blobs where a low-frequency field dips under LAKE_BAND. Spawn,
  * entrance mouths and the ramp head regions stay dry on purpose.
  */
+const waterBodyCache = new Map<number, WaterBody>();
 function waterBodyAt(x: number, z: number): WaterBody {
-  if (Math.abs(x) <= 14 && Math.abs(z) <= 14) return 0;          // spawn clarity
-  for (const [ex, ez] of ENTRANCES) if (Math.max(Math.abs(x - ex), Math.abs(z - ez)) <= 4) return 0;
-  if (terrainKindAt(x, z) === 'desert') return 0;                // dead sand: no water
-  // River A: a broad band wandering along X (its centre z is a noise curve
-  // that swings ±45, so the river visits every latitude over its run).
-  const centre1 = RIVER_WANDER * noise(x / 50 + 911, 371) - RIVER_WANDER / 2;
-  if (Math.abs(z - centre1) < RIVER_A_HALF) return 1;
-  // River B: the same idea along Z, crossing river A past the spawn region.
-  const centre2 = (RIVER_WANDER + 10) * noise(279, z / 60 + 817) - (RIVER_WANDER + 10) / 2;
-  if (Math.abs(x - centre2) < RIVER_B_HALF) return 1;
-  // Lakes: deep dips of the broad field pool into water anywhere else.
-  if (noise(x / 90 + 515, z / 90 + 515) < LAKE_BAND) return 2;
-  return 0;
+  x = Math.floor(x); z = Math.floor(z);
+  // Memoized: consulted for every voxel by surface(), get() and the flora
+  // gates; the same handful of columns get asked thousands of times per chunk.
+  const k = key2(x, z);
+  const hit = waterBodyCache.get(k);
+  if (hit !== undefined) return hit;
+  let body: WaterBody;
+  if (Math.abs(x) <= 14 && Math.abs(z) <= 14) body = 0;          // spawn clarity
+  else {
+    let protectedSpot = false;
+    for (const [ex, ez] of ENTRANCES) if (Math.max(Math.abs(x - ex), Math.abs(z - ez)) <= 4) protectedSpot = true;
+    if (protectedSpot) body = 0;
+    else if (terrainKindAt(x, z) === 'desert') body = 0;         // dead sand: no water
+    else {
+      // River A: a broad band wandering along X (its centre z is a noise curve
+      // that swings ±45, so the river visits every latitude over its run).
+      const centre1 = RIVER_WANDER * noise(x / 50 + 911, 371) - RIVER_WANDER / 2;
+      if (Math.abs(z - centre1) < RIVER_A_HALF) body = 1;
+      else {
+        // River B: the same idea along Z, crossing river A past the spawn region.
+        const centre2 = (RIVER_WANDER + 10) * noise(279, z / 60 + 817) - (RIVER_WANDER + 10) / 2;
+        if (Math.abs(x - centre2) < RIVER_B_HALF) body = 1;
+        // Lakes: deep dips of the broad field pool into water anywhere else.
+        else if (noise(x / 90 + 515, z / 90 + 515) < LAKE_BAND) body = 2;
+        else body = 0;
+      }
+    }
+  }
+  if (waterBodyCache.size > 150_000) waterBodyCache.clear(); // bounded
+  waterBodyCache.set(k, body);
+  return body;
 }
 const colors: Record<number, number> = {
   [Block.Dirt]: 0x8a5a4e, [Block.Stone]: 0x555761, [Block.Wood]: 0x4a3935,
@@ -337,8 +371,15 @@ export class World {
    */
   surface(x: number, z: number): number {
     x = Math.floor(x); z = Math.floor(z);
+    // Memoized: surface() is pure generation noise, but get() consults it for
+    // every voxel and the shore ring recurses into 8 neighbours — without the
+    // cache a single chunk build recomputed the same columns tens of
+    // thousands of times (measured 40k+ calls per chunk pair).
+    const k = key2(x, z);
+    const hit = this.surfaceCache.get(k);
+    if (hit !== undefined) return hit;
     // Keep the immediate spawn gently level and deterministic.
-    if (Math.abs(x) < 6 && Math.abs(z) < 6) return 5;
+    if (Math.abs(x) < 6 && Math.abs(z) < 6) { this.surfaceCache.set(k, 5); return 5; }
     let h = 4 + noise(x / 30, z / 30) * 5 + noise(x / 9, z / 9) * 2;
     // Terrain-variety shaping on top of the gentle base: rocky country lifts
     // into stone hills, mountains mass up high, desert flattens into drifting
@@ -370,10 +411,15 @@ export class World {
       }
       if (wetBed !== null) h = Math.min(h, wetBed + 1);
     }
-    return Math.floor(h);
+    const out = Math.floor(h);
+    if (this.surfaceCache.size > 150_000) this.surfaceCache.clear(); // bounded: regenerate is cheap
+    this.surfaceCache.set(k, out);
+    return out;
   }
 
   private shaftCells: Set<string> | null = null;
+  /** Memoized surface heights — surface() is pure noise, see surface(). */
+  private readonly surfaceCache = new Map<number, number>();
   /** Lazily rasterizes the walkable staircase shafts from each surface entrance into the caves. */
   private getShaftCells(): Set<string> {
     if (this.shaftCells) return this.shaftCells;
@@ -498,11 +544,11 @@ export class World {
   // below it and a rounded pocket chamber that actually connects to caves.
   // Unlike the ENTRANCE staircases these are hazards — no rails, no ramp.
 
-  private readonly mouthSpots = new Map<string, { cx: number; cz: number; top: number } | null>();
+  private readonly mouthSpots = new Map<number, { cx: number; cz: number; top: number } | null>();
 
   /** The sinkhole (if any) hosted by one 14-cell geological grid cell. */
   private mouthForCell(gx: number, gz: number): { cx: number; cz: number; top: number } | null {
-    const k = `${gx},${gz}`;
+    const k = key2(gx, gz);
     const cached = this.mouthSpots.get(k);
     if (cached !== undefined) return cached;
     let out: { cx: number; cz: number; top: number } | null = null;
@@ -679,11 +725,21 @@ export class World {
   private buildChunk(cx: number, cy: number, cz: number): void {
     const positions: number[] = [], normals: number[] = [], tint: number[] = [], effects: number[] = [], foliage: number[] = [], indices: number[] = [], uvs: number[] = [];
     const color = new THREE.Color();
+    // Chunk-local block memo: each voxel's get() is consulted ~7× during a
+    // build (self, 6 neighbour visibility checks, AO corners) and every miss
+    // recomputes noise3, caves and ore — the single hottest path in profiles.
+    const blockCache = new Map<number, Block>();
+    const getL = (x: number, y: number, z: number): Block => {
+      const k = ((x + 32768) * 65536 + (z + 32768)) * 256 + (y + 128);
+      let v = blockCache.get(k);
+      if (v === undefined) { v = this.get(x, y, z); blockCache.set(k, v); }
+      return v;
+    };
     // Solid-cell lookup used by the ambient occlusion pass.
-    const solidAt = (x: number, y: number, z: number): boolean => this.get(x, y, z) !== Block.Air;
+    const solidAt = (x: number, y: number, z: number): boolean => getL(x, y, z) !== Block.Air;
     for (let lx = 0; lx < SIZE; lx++) for (let lz = 0; lz < SIZE; lz++) for (let ly = 0; ly < SIZE; ly++) {
       const x = cx * SIZE + lx, y = cy * SIZE + ly, z = cz * SIZE + lz;
-      const id = this.get(x, y, z);
+      const id = getL(x, y, z);
       if (id === Block.Air) continue;
       color.setHex(colors[id] ?? 0xff00ff);
       // Trees carry their own per-cell palette (species trunk, canopy tints);
