@@ -13,6 +13,7 @@ import { DebugOverlay, type DamageSource } from './debugOverlay';
 import { BeamWeapon } from './beam';
 import { PowerUps, REDUCED_GRAVITY, trySpawnPlatform } from './powerups';
 import { Critters } from './critters';
+import { Chisel } from './chisel';
 import { BiomeHooks, HOOKS } from './biomeHooks';
 import { loadSettings, saveReduceIntensity, saveVolume } from './settings';
 import { clearSave, deserializeInventory, readSave, serializeInventory, writeSave } from './save';
@@ -37,6 +38,7 @@ const lantern = new THREE.PointLight(0xffb86b,0,12); scene.add(lantern);
 const world = new World(scene);
 const enemies = new Enemies(scene,world);
 const critters = new Critters(scene,world);
+const chisel = new Chisel(world);
 const audio = new AudioEngine();
 const beam = new BeamWeapon(scene, world, camera);
 const powerups = new PowerUps();
@@ -67,6 +69,14 @@ const rainPositions=new Float32Array(600*3); for(let i=0;i<600;i++){rainPosition
 const rainGeo=new THREE.BufferGeometry(); rainGeo.setAttribute('position',new THREE.BufferAttribute(rainPositions,3));
 const rain=new THREE.Points(rainGeo,new THREE.PointsMaterial({color:0x9bb7c8,size:.065,transparent:true,opacity:.75,depthWrite:false})); scene.add(rain);
 let aimDirection = new THREE.Vector3();
+// Outline of the block the player is pointing at, so the target is always obvious.
+const highlightGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002));
+const highlight = new THREE.LineSegments(highlightGeo, new THREE.LineBasicMaterial({ color: 0xf2e2c0, transparent: true, opacity: .85, depthTest: true }));
+highlight.visible = false; scene.add(highlight);
+// Faint outline of the exact sub-cell the chisel would remove.
+const cellGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+const cellOutline = new THREE.LineSegments(cellGeo, new THREE.LineBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: .95 }));
+cellOutline.visible = false; scene.add(cellOutline);
 function lock(){ if(started && !dead && !menuOpen) renderer.domElement.requestPointerLock(); }
 ui.startButton.addEventListener('click',()=>{started=true;ui.setStarted(true);audio.start();lock();});
 renderer.domElement.addEventListener('click',()=>{if(started && !menuOpen && !dead && !document.pointerLockElement)lock();});
@@ -77,6 +87,7 @@ document.addEventListener('keydown',e=>{
   if(e.code==='KeyE'){ui.toggleInventory();return;} if(e.code==='KeyC'){ui.toggleCrafting();return;} if(e.code==='KeyP'){ui.toggleSettings();return;} if(e.code==='Escape'){ui.close();return;}
   if(menuOpen || dead)return;
   if(e.code==='KeyV' && !e.repeat)thirdPerson=!thirdPerson;
+  if(e.code==='KeyG' && !e.repeat){const label=chisel.cycleShape();ui.toast(`CHISEL · ${label.toUpperCase()} · LEFT CARVE · RIGHT STAMP`);}
   if(e.code==='Space'){e.preventDefault();if(!e.repeat)jumpQueued=true;}
   if(/^Digit[1-9]$/.test(e.code))inventory.selected=Number(e.code.slice(5))-1;
   keys.add(e.code);
@@ -90,21 +101,40 @@ renderer.domElement.addEventListener('mousedown',e=>{
   if(document.pointerLockElement!==renderer.domElement || menuOpen || dead) return;
   const origin=player.position.clone().add(new THREE.Vector3(0,1.57,0));
   camera.getWorldDirection(aimDirection); const hit=world.raycast(origin,aimDirection,6);
+  const holdingChisel=inventory.selectedItem()?.id===Block.Chisel;
   if(e.button===0){
     if(inventory.beam){
       beam.setMouse(true);
       return;
     }
+    if(holdingChisel){
+      // Left click with the chisel shaves the exact sub-cell under the crosshair.
+      if(hit){
+        const result=chisel.carve(hit);
+        ui.toast(result.action==='missed'?result.label:`CHISEL · ${result.label}`);
+        if(result.action!=='missed')audio.event('hit');
+      }
+      return;
+    }
     if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,inventory.weapon?24:12)){audio.event('hit');return;}
-    if(hit){ if(inventory.add(hit.id)){world.set(hit.x,hit.y,hit.z,Block.Air);audio.event('break');} }
+    if(hit){ if(inventory.add(hit.id)){world.set(hit.x,hit.y,hit.z,Block.Air);chisel.clear(hit.x,hit.y,hit.z);audio.event('break');} }
   } else if(e.button===2){
     // Platform-seed power-up: right-click drops a scaffold underfoot if the cell is air.
     if(powerups.hasPlatform && trySpawnPlatform(world,player.position.x,player.position.y,player.position.z)){
       audio.event('break');
       return;
     }
+    if(holdingChisel){
+      // Right click with the chisel stamps a whole decorative shape.
+      if(hit){
+        const result=chisel.stamp(hit);
+        ui.toast(result.action==='missed'?result.label:`CHISEL · ${result.label}`);
+        if(result.action!=='missed')audio.event('break');
+      }
+      return;
+    }
     if(hit){const item=inventory.selectedItem();const p=hit.previous;
-      if(item && item.count>0 && !overlapsPlayer(p.x,p.y,p.z) && world.get(p.x,p.y,p.z)===Block.Air){world.set(p.x,p.y,p.z,item.id);inventory.remove(item.id,1);}}
+      if(item && item.count>0 && item.id!==Block.Chisel && !overlapsPlayer(p.x,p.y,p.z) && world.get(p.x,p.y,p.z)===Block.Air){world.set(p.x,p.y,p.z,item.id);inventory.remove(item.id,1);}}
   }
 });
 renderer.domElement.addEventListener('mouseup',e=>{if(e.button===0)beam.setMouse(false);});
@@ -144,6 +174,21 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       if(hook.sanityDrain>0)sanity=clamp(sanity-hook.sanityDrain*dt,0,100);
     }
     world.update(p,time);rain.visible=activeBiome==='storm' && exposed;rain.position.set(p.x,p.y,p.z);if(rain.visible){for(let i=0;i<600;i++){rainPositions[i*3+1]-=dt*12;if(rainPositions[i*3+1]<0)rainPositions[i*3+1]=20;}rainGeo.attributes.position.needsUpdate=true;}
+    // Target highlight: outline the block under the crosshair and, when the
+    // chisel is held, the exact sub-cell that would be shaved.
+    camera.getWorldDirection(aimDirection);
+    const eyeNow=p.clone().add(new THREE.Vector3(0,1.57,0));
+    const look=world.raycast(eyeNow,aimDirection,6);
+    if(look){
+      highlight.visible=true;
+      highlight.position.set(look.x+.5,look.y+.5,look.z+.5);
+      if(inventory.selectedItem()?.id===Block.Chisel){
+        const res=chisel.preview(look);
+        if(res){cellOutline.visible=true;cellOutline.position.set(res.x,res.y,res.z);cellOutline.scale.set(res.sx,res.sy,res.sz);}
+        else cellOutline.visible=false;
+      } else cellOutline.visible=false;
+    } else {highlight.visible=false;cellOutline.visible=false;}
+    ui.tick(dt);
     camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));camera.position.add(back);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
     if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id)=>{inventory.add(id);audio.event('break');});}
     avatar.update(p,yaw,thirdPerson);

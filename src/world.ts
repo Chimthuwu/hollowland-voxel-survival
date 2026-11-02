@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { appendFoliage, type FoliageBuffers } from './foliage';
+import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
 
-export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid }
+export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel }
 export type Biome = 'overcast' | 'storm' | 'glitch' | 'psychosis' | 'maw' | 'catacombs' | 'veins' | 'sky';
 
 /** The surface regions form strips along +X; negative X remains the spawn region. */
@@ -70,6 +71,10 @@ const colors: Record<number, number> = {
   [Block.GravityCharm]: 0xc7b3ff,
   [Block.PlatformSeed]: 0x8fe6c0,
   [Block.Acid]: 0x9fd23a,
+  [Block.Grass]: 0x7fa668,
+  [Block.Skyfruit]: 0x6fc4ff,
+  [Block.Morsel]: 0xd88f7a,
+  [Block.Chisel]: 0x9aa3b0,
 };
 // Each face is counter-clockwise as seen from outside the block.
 const faces = [
@@ -83,25 +88,92 @@ const faces = [
 interface Chunk { mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>; }
 export interface VoxelHit { x: number; y: number; z: number; previous: { x: number; y: number; z: number }; id: Block; distance: number }
 
+/**
+ * Seasonal foliage tints (RGB multipliers). The palette stays in the game's
+ * lavender/teal family but swings warm and cold across the year.
+ */
+const SEASON_TINTS: ReadonlyArray<[number, number, number]> = [
+  [1.06, 1.00, .98],  // spring: fresh, slightly pink
+  [1.00, 1.02, 1.06],  // summer: cool and bright
+  [1.12, .96, .86],   // autumn: warm amber
+  [.92, .96, 1.10],   // winter: pale and blue
+];
+
 export class World {
   private readonly edits = new Map<string, Block>();
   private readonly chunks = new Map<string, Chunk>();
   private readonly material: THREE.MeshStandardMaterial;
   private readonly clock = { value: 0 };
+  /** Carved detail per cell. A cell without a profile is a plain full block. */
+  private readonly micros = new Map<string, MicroProfile>();
+  /** Current seasonal foliage tint, driven by the clock in update(). */
+  private readonly seasonTint = { value: new THREE.Color(1, 1, 1) };
 
   constructor(private readonly scene: THREE.Scene) {
     this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
     const clock = this.clock;
+    const seasonTint = this.seasonTint;
     this.material.onBeforeCompile = shader => {
       shader.uniforms.worldTime = clock;
-      shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float effect;\nuniform float worldTime;');
+      shader.uniforms.uSeasonTint = seasonTint;
+      shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute float effect;\nattribute float foliage;\nuniform float worldTime;\nuniform vec3 uSeasonTint;');
+      shader.vertexShader = shader.vertexShader.replace('#include <color_vertex>', `#include <color_vertex>
+        vColor.rgb *= mix(vec3(1.0), uSeasonTint, foliage);
+      `);
       shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
         float pulse = sin(worldTime * 2.3 + position.x * .38 + position.y * .42 + position.z * .31) * .055;
         if (effect > .5 && effect < 1.5) transformed += normal * pulse;
         if (effect > 1.5) transformed.x += step(.91, fract(sin(floor(worldTime * 8.0) + floor(position.y) * 17.0) * 43758.5453)) * .12;
+        // Leaves and blossoms sway gently; trunks stay put.
+        if (foliage > .5) {
+          float sway = sin(worldTime * 1.4 + position.x * .8 + position.z * .6) * .035
+                     + sin(worldTime * 2.7 + position.x * 1.9) * .015;
+          transformed.x += sway;
+          transformed.z += sway * .6;
+        }
       `);
     };
-    this.material.customProgramCacheKey = () => 'hollowland-voxel-effects-v1';
+    this.material.customProgramCacheKey = () => 'hollowland-voxel-effects-v2';
+  }
+
+  /**
+   * The 16-level solid mask of one column of a neighbouring cell: 0 for air,
+   * the carved profile's mask when the cell has been chiselled, otherwise a
+   * solid 0xffff.
+   */
+  microColumnMask(x: number, y: number, z: number, ci: number, cj: number): number {
+    const id = this.get(x, y, z);
+    if (id === Block.Air) return 0;
+    const profile = this.micros.get(key(x, y, z));
+    return profile ? profile.column(ci, cj) : 0xffff;
+  }
+
+  /** The carved profile of a cell, or undefined when the cell is a plain block. */
+  microAt(x: number, y: number, z: number): MicroProfile | undefined {
+    return this.micros.get(key(Math.floor(x), Math.floor(y), Math.floor(z)));
+  }
+
+  /** Stores a carved profile for a cell and rebuilds the affected chunk. */
+  setMicro(x: number, y: number, z: number, profile: MicroProfile): void {
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    this.micros.set(key(x, y, z), profile);
+    const cx = chunkCoord(x), cy = chunkCoord(y), cz = chunkCoord(z);
+    const targets = [[cx, cy, cz]];
+    if (x % SIZE === 0) targets.push([cx - 1, cy, cz]);
+    if ((x + 1) % SIZE === 0) targets.push([cx + 1, cy, cz]);
+    if (y % SIZE === 0) targets.push([cx, cy - 1, cz]);
+    if ((y + 1) % SIZE === 0) targets.push([cx, cy + 1, cz]);
+    if (z % SIZE === 0) targets.push([cx, cy, cz - 1]);
+    if ((z + 1) % SIZE === 0) targets.push([cx, cy, cz + 1]);
+    for (const [a, b, c] of targets) if (this.chunks.has(key(a, b, c))) this.buildChunk(a, b, c);
+  }
+
+  /** Clears any carved detail on a cell (used when the block is broken). */
+  clearMicro(x: number, y: number, z: number): void {
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    if (!this.micros.delete(key(x, y, z))) return;
+    const cx = chunkCoord(x), cy = chunkCoord(y), cz = chunkCoord(z);
+    if (this.chunks.has(key(cx, cy, cz))) this.buildChunk(cx, cy, cz);
   }
 
   surface(x: number, z: number): number {
@@ -176,9 +248,34 @@ export class World {
       case 'glitch': return y === height || noise(x / 5, z / 5) > .67 ? Block.Glitch : Block.Stone;
       case 'psychosis': return y === height ? Block.Flesh : Block.Bone;
       case 'maw': return y === height ? Block.Scorched : Block.Flesh;
-      default: return Block.Dirt;
+      // The default biome wears sage grass over warm dirt.
+      default: return y === height ? Block.Grass : Block.Dirt;
     }
   }
+
+  /** True if (x,y,z) is one of the mineable trunk cells of a procedural tree. */
+  isTreeTrunk(x: number, y: number, z: number): boolean {
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    if (Math.abs(x) <= 10 && Math.abs(z) <= 10) return false;
+    if (hash(x, z) <= .985) return false;
+    const height = this.surface(x, z);
+    return y > height && y <= height + 3;
+  }
+
+  /**
+   * Fells the tree rooted at (x,z): clears its trunk cells and marks the spot
+   * so chunk rebuilds stop drawing the baked-in canopy.
+   */
+  fellTree(x: number, z: number): void {
+    x = Math.floor(x); z = Math.floor(z);
+    this.felled.add(`${x},${z}`);
+    const height = this.surface(x, z);
+    for (let y = height + 1; y <= height + 3; y++)
+      if (this.isTreeTrunk(x, y, z)) this.set(x, y, z, Block.Air);
+  }
+
+  /** Whether the tree rooted at (x,z) has been felled. */
+  readonly felled = new Set<string>();
 
   set(x: number, y: number, z: number, id: Block): void {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
@@ -196,6 +293,21 @@ export class World {
 
   update(position: THREE.Vector3, time: number): void {
     this.clock.value = time;
+    // Seasons drift slowly through the year: a long, gentle cycle that shifts
+    // the foliage hue so the same forest reads differently over a session.
+    const YEAR = 240; // seconds per full seasonal cycle
+    const phase = (time / YEAR) % 1;
+    const season = phase * 4; // 0..4 across four seasons
+    const idx = Math.floor(season) % 4;
+    const next = (idx + 1) % 4;
+    const blend = season - Math.floor(season);
+    const smooth = blend * blend * (3 - 2 * blend);
+    const a = SEASON_TINTS[idx], b = SEASON_TINTS[next];
+    this.seasonTint.value.setRGB(
+      a[0] + (b[0] - a[0]) * smooth,
+      a[1] + (b[1] - a[1]) * smooth,
+      a[2] + (b[2] - a[2]) * smooth,
+    );
     const cx = chunkCoord(position.x), cy = chunkCoord(position.y), cz = chunkCoord(position.z);
     const wanted: Array<{x: number; y: number; z: number; score: number}> = [];
     for (let dx = -RADIUS; dx <= RADIUS; dx++) for (let dz = -RADIUS; dz <= RADIUS; dz++) {
@@ -216,42 +328,90 @@ export class World {
   }
 
   private buildChunk(cx: number, cy: number, cz: number): void {
-    const positions: number[] = [], normals: number[] = [], tint: number[] = [], effects: number[] = [], indices: number[] = [];
+    const positions: number[] = [], normals: number[] = [], tint: number[] = [], effects: number[] = [], foliage: number[] = [], indices: number[] = [];
     const color = new THREE.Color();
+    // Solid-cell lookup used by the ambient occlusion pass.
+    const solidAt = (x: number, y: number, z: number): boolean => this.get(x, y, z) !== Block.Air;
     for (let lx = 0; lx < SIZE; lx++) for (let lz = 0; lz < SIZE; lz++) for (let ly = 0; ly < SIZE; ly++) {
       const x = cx * SIZE + lx, y = cy * SIZE + ly, z = cz * SIZE + lz;
       const id = this.get(x, y, z);
       if (id === Block.Air) continue;
+      const profile = this.micros.get(key(x, y, z));
+      if (profile) {
+        // Carved block: emit its sub-voxel geometry instead of a plain cube.
+        color.setHex(colors[id] ?? 0xff00ff);
+        const micro: MicroBuffers = { positions, normals, tint, effects, indices };
+        const verts = appendMicroGeometry(micro, x, y, z, profile, [color.r, color.g, color.b],
+          (nx, ny, nz, ci, cj) => this.microColumnMask(nx, ny, nz, ci, cj));
+        for (let i = 0; i < verts; i++) foliage.push(0);
+        continue;
+      }
       color.setHex(colors[id] ?? 0xff00ff);
       // Per-voxel brightness variation gives the ground a dithered pixel-art
       // texture instead of one flat color per block type.
       const vary = .92 + hash3(x, y, z) * .16;
       for (const face of faces) {
-        if (this.get(x + face.n[0], y + face.n[1], z + face.n[2]) !== Block.Air) continue;
+        // Skip faces that are hidden behind a solid neighbour.
+        if (solidAt(x + face.n[0], y + face.n[1], z + face.n[2])) continue;
         const base = positions.length / 3;
-        for (const v of face.v) {
+        for (let vi = 0; vi < 4; vi++) {
+          const v = face.v[vi];
           positions.push(x + v[0], y + v[1], z + v[2]);
           normals.push(...face.n);
-          tint.push(color.r * face.shade * vary, color.g * face.shade * vary, color.b * face.shade * vary);
+          // Ambient occlusion: darken vertices that sit in a concave corner.
+          const ao = this.vertexOcclusion(x, y, z, face, vi, solidAt);
+          tint.push(color.r * face.shade * vary * ao, color.g * face.shade * vary * ao, color.b * face.shade * vary * ao);
           effects.push(id === Block.Flesh ? 1 : id === Block.Glitch ? 2 : 0);
+          foliage.push(0);
         }
         indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
       }
     }
     // Append trees into the same chunk geometry so we pay one extra draw call per chunk, not per tree.
-    const foliage: FoliageBuffers = { positions, normals, tint, effects, indices };
-    appendFoliage(foliage, cx, cy, cz, (x, z) => this.surface(x, z), biomeAt);
+    const foliageBuffers: FoliageBuffers = { positions, normals, tint, effects, foliage, indices };
+    appendFoliage(foliageBuffers, cx, cy, cz, (x, z) => this.surface(x, z), biomeAt, (x, z) => this.felled.has(`${x},${z}`));
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(tint, 3));
     geometry.setAttribute('effect', new THREE.Float32BufferAttribute(effects, 1));
+    geometry.setAttribute('foliage', new THREE.Float32BufferAttribute(foliage, 1));
     geometry.setIndex(indices);
     geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, this.material);
     const id = key(cx, cy, cz), old = this.chunks.get(id);
     if (old) { this.scene.remove(old.mesh); old.mesh.geometry.dispose(); }
     this.chunks.set(id, { mesh }); this.scene.add(mesh);
+  }
+
+  /**
+   * Classic voxel ambient occlusion: for each face vertex, look at the two
+   * edge neighbours and the corner neighbour just outside the face and darken
+   * the vertex when they are solid. Gives every block a soft, readable form.
+   */
+  private vertexOcclusion(
+    x: number, y: number, z: number,
+    face: { n: number[]; v: number[][] },
+    vi: number,
+    solidAt: (x: number, y: number, z: number) => boolean,
+  ): number {
+    const n = face.n;
+    // The face's local tangent axes are the two axes that aren't the normal.
+    const axes: number[] = [];
+    for (let a = 0; a < 3; a++) if (n[a] === 0) axes.push(a);
+    const v = face.v[vi];
+    // For each tangent axis, the vertex sits on the low or high side of the block.
+    const sides = axes.map(a => (v[a] === 1 ? 1 : -1));
+    let occluded = 0;
+    for (let i = 0; i < 2; i++) {
+      const a = axes[i];
+      const nx = x + n[0], ny = y + n[1], nz = z + n[2];
+      const px = nx + (a === 0 ? sides[i] : 0);
+      const py = ny + (a === 1 ? sides[i] : 0);
+      const pz = nz + (a === 2 ? sides[i] : 0);
+      if (solidAt(px, py, pz)) occluded++;
+    }
+    return 1 - occluded * .14;
   }
 
   raycast(origin: THREE.Vector3, direction: THREE.Vector3, max: number): VoxelHit | null {

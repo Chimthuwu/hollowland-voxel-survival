@@ -1,6 +1,6 @@
 import { Block, type Biome } from './world';
 
-export type Recipe = 'torch' | 'weapon' | 'scaffold' | 'totem' | 'beam';
+export type Recipe = 'torch' | 'weapon' | 'scaffold' | 'totem' | 'beam' | 'chisel';
 export type InventorySlot = { id: Block; count: number };
 
 // Ingredient amounts are kept here so they can be tuned without changing the UI.
@@ -10,6 +10,7 @@ export const RECIPES: Record<Recipe, { name: string; description: string }> = {
   scaffold: { name: 'Scaffold ×4', description: '2 wood' },
   totem: { name: 'Warding totem', description: '3 stone + 2 glitch / flesh' },
   beam: { name: 'Beam weapon', description: '5 crystal — a continuous mining tool' },
+  chisel: { name: 'Chisel', description: '3 stone + 2 wood — carve detail into blocks' },
 };
 
 const NAMES: Record<number, string> = {
@@ -18,7 +19,9 @@ const NAMES: Record<number, string> = {
   [Block.Flesh]: 'Flesh', [Block.Bone]: 'Bone', [Block.Torch]: 'Torch',
   [Block.Scaffold]: 'Scaffold', [Block.Totem]: 'Totem', [Block.Scorched]: 'Scorched',
   [Block.Crystal]: 'Crystal', [Block.GravityCharm]: 'Gravity charm',
-  [Block.PlatformSeed]: 'Platform seed',
+  [Block.PlatformSeed]: 'Platform seed', [Block.Acid]: 'Acid',
+  [Block.Grass]: 'Grass', [Block.Skyfruit]: 'Skyfruit', [Block.Morsel]: 'Raw morsel',
+  [Block.Chisel]: 'Chisel',
 };
 
 export class Inventory {
@@ -83,6 +86,11 @@ export class Inventory {
         success = !trial.beam && trial.remove(Block.Crystal, 5);
         if (success) trial.beam = true;
         break;
+      case 'chisel':
+        success = !trial.slots.some(slot => slot.id === Block.Chisel)
+          && trial.remove(Block.Stone, 3) && trial.remove(Block.Wood, 2)
+          && trial.add(Block.Chisel, 1);
+        break;
     }
     if (!success) return false;
     this.slots = trial.slots;
@@ -113,6 +121,8 @@ export class UI {
   private readonly hotbar: HTMLElement;
   private readonly details: HTMLElement;
   private readonly resumeHint: HTMLElement;
+  private readonly toastEl: HTMLElement;
+  private toastTimer = 0;
   private readonly biome: HTMLElement;
   private readonly bars: Record<'health' | 'sanity' | 'stamina', HTMLElement>;
   private openPanel: 'inventory' | 'crafting' | 'settings' | null = null;
@@ -146,12 +156,14 @@ export class UI {
     corner.append(vitals);
     this.details = node('div', 'world-info', '');
     this.resumeHint = node('div', 'resume-hint hidden', 'CLICK THE WORLD TO RESUME · ESC RELEASES POINTER');
+    this.toastEl = node('div', 'toast hidden', '');
+    this.toastEl.setAttribute('aria-live', 'polite');
     document.addEventListener('pointerlockchange', () => this.updateResumeHint());
     const crosshair = node('div', 'crosshair');
     crosshair.setAttribute('aria-hidden', 'true');
     this.hotbar = node('div', 'hotbar');
     this.hotbar.setAttribute('aria-label', 'Quick slots');
-    hud.append(corner, this.details, crosshair, this.resumeHint, this.hotbar);
+    hud.append(corner, this.details, crosshair, this.resumeHint, this.toastEl, this.hotbar);
 
     this.inventoryPanel = node('section', 'menu-panel inventory-panel hidden');
     this.inventoryGrid = node('div', 'inventory-grid');
@@ -235,6 +247,20 @@ export class UI {
   }
 
   private readonly craftFeedback: HTMLElement;
+
+  /** Shows a short transient message near the bottom of the screen. */
+  toast(text: string, seconds = 2.4): void {
+    this.toastEl.textContent = text;
+    this.toastEl.classList.remove('hidden');
+    this.toastTimer = seconds;
+  }
+
+  /** Called each frame so the toast can fade itself out. */
+  tick(dt: number): void {
+    if (this.toastTimer <= 0) return;
+    this.toastTimer -= dt;
+    if (this.toastTimer <= 0) this.toastEl.classList.add('hidden');
+  }
 
   update(health: number, sanity: number, stamina: number, biome: Biome, info: string): void {
     for (const [key, value] of [['health', health], ['sanity', sanity], ['stamina', stamina]] as const) {

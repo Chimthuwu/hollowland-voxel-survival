@@ -8,7 +8,7 @@ describe('foliage smoke', () => {
     const scene = new THREE.Scene();
     const world = new World(scene);
     const surface = world.surface(20, 20);
-    const out: FoliageBuffers = { positions: [], normals: [], tint: [], effects: [], indices: [] };
+    const out: FoliageBuffers = { positions: [], normals: [], tint: [], effects: [], foliage: [], indices: [] };
     appendFoliage(out, 1, 0, 1, (x, z) => world.surface(x, z), (x, y, z) => {
       if (y > 64) return 'sky';
       if (y < -48) return 'veins';
@@ -20,7 +20,7 @@ describe('foliage smoke', () => {
       return 'maw';
     });
     // Out-of-surface chunk emits nothing.
-    const out2: FoliageBuffers = { positions: [], normals: [], tint: [], effects: [], indices: [] };
+    const out2: FoliageBuffers = { positions: [], normals: [], tint: [], effects: [], foliage: [], indices: [] };
     appendFoliage(out2, 5, 5, 5, (x, z) => world.surface(x, z), () => 'overcast');
     expect(out2.positions.length).toBe(0);
 
