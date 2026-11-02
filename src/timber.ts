@@ -32,7 +32,7 @@ interface Fall {
   fruitChance: boolean;
 }
 
-const FALL_ACCEL = 3.4;      // rad/s² — gives the tip real momentum
+const FALL_ACCEL = 4.1;      // rad/s² — heavy tip that keeps gaining speed
 const IMPACT_TIME_SLOP = .05; // impact angle jitter per tree
 const FACES = [
   { n: [1, 0, 0], v: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]], shade: .82 },
@@ -74,7 +74,7 @@ export class Timber {
   private startFall(shape: forest.TreeShape, awayFrom: THREE.Vector3): void {
     // Collect every surviving cell of the tree (the world may already have
     // eaten a few — those are the player's harvested wood).
-    const cells: Array<{ x: number; y: number; z: number; id: Block; kind: 'trunk' | 'leaf' | 'fruit'; accent: boolean }> = [];
+    const cells: Array<{ x: number; y: number; z: number; id: Block; kind: 'trunk' | 'leaf' | 'fruit' | 'branch'; accent: boolean }> = [];
     for (let y = shape.baseY; y <= shape.topY + 1; y++) {
       for (let x = shape.tx - 4; x <= shape.tx + 4; x++) {
         for (let z = shape.tz - 4; z <= shape.tz + 4; z++) {
@@ -134,7 +134,7 @@ export class Timber {
           this.onImpact();
           this.dropHarvest(f);
           f.phase = 'settle';
-          f.omega = -f.omega * .17; // bounce back up before settling
+          f.omega = -f.omega * .12; // a brief, stiff bounce before settling
         }
       } else if (f.phase === 'settle') {
         f.theta += f.omega * dt;
@@ -209,7 +209,7 @@ function cellsSameTree(a: forest.TreeShape, b: forest.TreeShape): boolean {
 
 /** Builds one merged, face-culled mesh for the whole tree (trunk + canopy + fruit).
  * Vertices are relative to `pivot` so the rotation happens about the hinge. */
-function buildTreeMesh(cells: Array<{ x: number; y: number; z: number; id: Block; kind: 'trunk' | 'leaf' | 'fruit'; accent: boolean }>, shape: forest.TreeShape, pivot: THREE.Vector3): { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial; trunkCount: number; fruitChance: boolean } {
+function buildTreeMesh(cells: Array<{ x: number; y: number; z: number; id: Block; kind: 'trunk' | 'leaf' | 'fruit' | 'branch'; accent: boolean }>, shape: forest.TreeShape, pivot: THREE.Vector3): { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial; trunkCount: number; fruitChance: boolean } {
   const solid = new Set<string>();
   for (const c of cells) solid.add(`${c.x},${c.y},${c.z}`);
 
@@ -217,9 +217,10 @@ function buildTreeMesh(cells: Array<{ x: number; y: number; z: number; id: Block
   let trunkCount = 0, fruitChance = false;
   // Colour lookup mirrors world.buildChunk: species trunk tints, canopy tints.
   for (const c of cells) {
-    if (c.kind === 'trunk') trunkCount++;
+    // Branch stubs fell with the tree and count toward the wood harvest.
+    if (c.kind === 'trunk' || c.kind === 'branch') trunkCount++;
     else if (c.kind === 'fruit') fruitChance = true;
-    const tint: [number, number, number] = c.kind === 'trunk'
+    const tint: [number, number, number] = (c.kind === 'trunk' || c.kind === 'branch')
       ? forest.trunkTint(shape, c.y)
       : c.kind === 'fruit'
         ? hexToRGB(blockColor(Block.Skyfruit))

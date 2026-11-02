@@ -13,7 +13,7 @@ import type { Biome } from './world';
  * (type-only import), so a World instance decides WHEN to ask about trees.
  */
 
-export type TreeCell = { kind: 'trunk' | 'leaf' | 'fruit'; accent: boolean };
+export type TreeCell = { kind: 'trunk' | 'leaf' | 'fruit' | 'branch'; accent: boolean };
 
 export interface TreeShape {
   tx: number;
@@ -91,11 +91,20 @@ function windDir(tree: TreeShape): [number, number] {
   return [wx, wz];
 }
 
-/** Trunk radius at row ly, with a hashed flare at the bottom rows. */
+/** Trunk radius at row ly, with root flares at the base and bark grooves
+ *  (four shallow lobes around the girth) so the trunk reads ridged wood,
+ *  not a smooth round blob. */
 function trunkRadiusAt(tree: TreeShape, ly: number, dy: number, dz: number): number {
   const t = Math.min(1, Math.max(0, ly / Math.max(1, tree.height - 1)));
   let r = tree.rBase + (tree.rTop - tree.rBase) * t;
-  if (ly <= 1) r += .55 + hash(tree.tx * 2.1 + dy, tree.tz * 1.9 + dz) * .35; // root flare
+  // Root flare: buttressed skirt spreading out over the first three rows.
+  if (ly <= 2) {
+    const skirt = ly === 0 ? 1 : ly === 1 ? .62 : .32;
+    r += (0.7 + hash(tree.tx * 2.1 + dy, tree.tz * 1.9 + dz) * .4) * skirt;
+  } else {
+    // Bark grooves, rotating slowly with height so ridges spiral a little.
+    r += Math.sin(Math.atan2(dz, dy) * 3 + tree.leanSeed * 9 + ly * .35) * .07;
+  }
   return r;
 }
 
@@ -125,9 +134,18 @@ function canopyInfo(tree: TreeShape, x: number, y: number, z: number, dxRaw: num
     // Layered spire: a clear exposed trunk, canopy from ~55% of the trunk height
     // up to 2 rows above the trunk top.
     const y0 = Math.floor(tree.height * .52);
+    // Branch stubs: knuckled wood arms poke out of the bare trunk, one to four
+    // rows under the crown, so trunk columns read as wood, not grey pillars.
+    if (ly >= y0 - 4 && ly < y0) {
+      const pick = hash(tree.tx * 1.9 + ly * 3.7, tree.tz * 2.9 + ly * 5.1);
+      const [bx, bz] = [[1, 0], [-1, 0], [0, 1], [0, -1]][Math.floor(pick * 4)];
+      const reach = hash(tree.tx * 2.3 + ly * 7.7, tree.tz * 1.1 + ly * 4.3) > .42 ? 2 : 1;
+      if ((dx === bx && dz === bz) || (reach === 2 && dx === bx * 2 && dz === bz * 2)) return { kind: 'branch', accent: false };
+    }
     if (ly < y0 || ly > tree.height + 1) {
-      // Hanging skyfruit just under the lowest canopy ring.
-      if (ly === y0 - 1 && edge < .11 && Math.abs(dx) <= 2 && Math.abs(dz) <= 2) return { kind: 'fruit', accent: false };
+      // Dangling skyfruit: two rows of clustered fruit just under the lowest
+      // canopy ring, dense enough to be unmistakably present, not speckle.
+      if ((ly === y0 - 1 || ly === y0 - 2) && edge < .2 && Math.abs(dx) <= 2 && Math.abs(dz) <= 2) return { kind: 'fruit', accent: false };
       return null;
     }
     const t = (ly - y0) / (tree.height + 1.2 - y0);
@@ -288,9 +306,12 @@ export function leafTint(tree: TreeShape, x: number, y: number, z: number, accen
   return [c[0] * j, c[1] * j, c[2] * j];
 }
 
-/** Per-cell trunk colour. */
+/** Per-cell trunk colour: horizontal growth bands plus fine grain, so bark
+ *  reads as layered wood instead of one flat grey. */
 export function trunkTint(tree: TreeShape, y: number): [number, number, number] {
   const c = TRUNK_COLORS[tree.biome];
-  const j = .95 + hash3(tree.tx, y, tree.tz) * .1;
+  const band = .9 + hash3(tree.tx, Math.floor(y / 2), tree.tz) * .2;
+  const grain = .975 + hash3(tree.tx + y * .31, y, tree.tz) * .05;
+  const j = band * grain;
   return [c[0] * j, c[1] * j, c[2] * j];
 }

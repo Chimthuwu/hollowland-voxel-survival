@@ -1,6 +1,6 @@
 import type { Biome } from './world';
 
-type SoundEvent = 'hit' | 'break' | 'thunder' | 'shift' | 'squelch' | 'hurt' | 'heartbeat' | 'gust' | 'bubble' | 'whisper';
+type SoundEvent = 'hit' | 'break' | 'thunder' | 'shift' | 'squelch' | 'hurt' | 'heartbeat' | 'gust' | 'bubble' | 'whisper' | 'thud';
 type Ambient = { drone: number; overtone: number; wind: number; cutoff: number; pulse: number };
 
 // Subtle, distinct textures for each region; levels are relative to the master gain.
@@ -35,6 +35,7 @@ const EFFECTS: Record<SoundEvent, Effect> = {
   gust:    { duration: 1.1, frequency: 320, endFrequency: 120, tone: .06, noise: .30, filter: 1900, wave: 'sawtooth' },
   bubble:  { duration: .22, frequency: 420, endFrequency: 900, tone: .10, noise: .10, filter: 2600, wave: 'sine' },
   whisper: { duration: .85, frequency: 260, endFrequency: 210, tone: .02, noise: .5,  filter: 3600, wave: 'sine' },
+  thud:    { duration: .8,  frequency: 95,  endFrequency: 28,  tone: .3,  noise: .38, filter: 200,  wave: 'sine' },
 };
 
 /** Lazy Web Audio: call start() in a user gesture, and again if autoplay was blocked. */

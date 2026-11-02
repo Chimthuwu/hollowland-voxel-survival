@@ -3,12 +3,12 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { Block, biomeAt, type Biome, World } from './world';
-import { Enemies } from './entities';
+import { Enemies, type Kind } from './entities';
 import { AudioEngine } from './audio';
 import { Inventory, UI, headBlockFor, itemLabel } from './ui';
 import { Player } from './player';
 import { Avatar } from './avatar';
-import { dayPhase, daylightLevel, nearbyLight, timeOfDayLabel } from './lighting';
+import { dayPhase, daylightLevel, nearbyLight, shadeAt, timeOfDayLabel } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
 import { canBreak, effectiveTier, meleeDamage } from './tools';
 import { Pickups } from './pickups';
@@ -21,7 +21,7 @@ import { KnappingMinigame } from './knapping';
 import type { KnapTool } from './knappingCore';
 import { BiomeHooks, HOOKS } from './biomeHooks';
 import { loadSettings, saveReduceIntensity, saveVolume } from './settings';
-import { clearSave, deserializeInventory, readSave, serializeInventory, writeSave } from './save';
+import { clearSave, deserializeInventory, readSave, serializeInventory, writeSave, type SaveData } from './save';
 import './style.css';
 
 const clamp = THREE.MathUtils.clamp;
@@ -69,7 +69,11 @@ PowerUps.placeAll(world);
 const hooks = new BiomeHooks(world);
 const loot = new Pickups(scene, (x, y, z) => world.get(x, y, z) !== Block.Air);
 // Tree felling: a removed base trunk cell topples the whole tree and spills wood.
-const timber = new Timber(scene, world, (id, pos) => loot.spawn(id, pos, 1), () => audio.event('break'));
+const timber = new Timber(scene, world, (id, pos) => loot.spawn(id, pos, 1), () => {
+  // The ground punch: a low boom plus camera shake scaled to the fall.
+  audio.event('thud');
+  shakeTimer = .5;
+});
 const inventory = new Inventory();
 let menuOpen = false, started = false, dead = false, deathTimer = 0;
 const settings = loadSettings();
@@ -101,12 +105,31 @@ const avatar = new Avatar(scene);
 const spawn = player.position.clone();
 let health=100, sanity=100, stamina=100, yaw=0, pitch=0, gravity=1, thirdPerson=false, activeBiome:Biome='overcast';
 let time=0, gravityTimer=0, lightningTimer=6, flashTimer=0, effectTimer=0, invertTimer=0, footsteps=0, lastImpact=0, hookMessage='';
+// Screen shake from felled trees hitting the ground: decays over half a second.
+let shakeTimer = 0;
+// Canopy-gloom level: smoothed 0..~.55 darkness applied while the player
+// stands in genuine shade (under a canopy or any cover outdoors).
+let gloomLevel = 0;
+
+/** Anatomy-keyed loot: shells shear into chitin, drakes leave hide and claws;
+ * light creatures leave fibres; everything yields at least a raw morsel. */
+const CREATURE_DROPS: Partial<Record<Kind, Array<[Block, number]>>> = {
+  skitter: [[Block.Silk, 1], [Block.Morsel, 1]],
+  hopper: [[Block.Silk, 1], [Block.Morsel, 1]],
+  stalker: [[Block.Claw, 1], [Block.Morsel, 2]],
+  thrasher: [[Block.Chitin, 2], [Block.Morsel, 2]],
+  saurolisk: [[Block.Hide, 2], [Block.Claw, 2], [Block.Morsel, 3]],
+  cresthorn: [[Block.Hide, 2], [Block.Claw, 1], [Block.Morsel, 4]],
+  crawler: [[Block.Morsel, 1]],
+  node: [[Block.Morsel, 1]],
+  hallucination: [[Block.Morsel, 1]],
+};
 const overlay = new DebugOverlay();
 const keys = new Set<string>(); let jumpQueued=false;
 const fog = scene.fog as THREE.FogExp2;
 const composer = new EffectComposer(renderer); composer.addPass(new RenderPass(scene,camera));
-const post = new ShaderPass({uniforms:{tDiffuse:{value:null}, uTime:{value:0}, uGlitch:{value:0}, uPsy:{value:0}},vertexShader:'varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:`uniform sampler2D tDiffuse;uniform float uTime,uGlitch,uPsy;varying vec2 vUv;
-void main(){vec2 p=vUv; float band=step(.985,fract(sin(floor(p.y*80.)+floor(uTime*8.))*43758.5453)); p.x+=uGlitch*band*.012*sin(uTime*37.); float d=uGlitch*.003; vec3 col=vec3(texture2D(tDiffuse,p+vec2(d,0.)).r,texture2D(tDiffuse,p).g,texture2D(tDiffuse,p-vec2(d,0.)).b); col*=1.-uGlitch*.13*(.5+.5*sin(p.y*900.)); float vignette=smoothstep(.83,.2,length(vUv-.5)); col*=mix(1.,.48+.52*vignette,uPsy);gl_FragColor=vec4(col,1.);\n#include <colorspace_fragment>\n}`}); composer.addPass(post);
+const post = new ShaderPass({uniforms:{tDiffuse:{value:null}, uTime:{value:0}, uGlitch:{value:0}, uPsy:{value:0}, uGloom:{value:0}},vertexShader:'varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:`uniform sampler2D tDiffuse;uniform float uTime,uGlitch,uPsy,uGloom;varying vec2 vUv;
+void main(){vec2 p=vUv; float band=step(.985,fract(sin(floor(p.y*80.)+floor(uTime*8.))*43758.5453)); p.x+=uGlitch*band*.012*sin(uTime*37.); float d=uGlitch*.003; vec3 col=vec3(texture2D(tDiffuse,p+vec2(d,0.)).r,texture2D(tDiffuse,p).g,texture2D(tDiffuse,p-vec2(d,0.)).b); col*=1.-uGlitch*.13*(.5+.5*sin(p.y*900.)); float vignette=smoothstep(.83,.2,length(vUv-.5)); col*=mix(1.,.48+.52*vignette,uPsy); col*=1.-uGloom*.3;gl_FragColor=vec4(col,1.);\n#include <colorspace_fragment>\n}`}); composer.addPass(post);
 // Rain is visual only; lightning and wind have their own gameplay timers.
 const rainPositions=new Float32Array(600*3); for(let i=0;i<600;i++){rainPositions[i*3]=(Math.random()-.5)*36;rainPositions[i*3+1]=Math.random()*20;rainPositions[i*3+2]=(Math.random()-.5)*36;}
 const rainGeo=new THREE.BufferGeometry(); rainGeo.setAttribute('position',new THREE.BufferAttribute(rainPositions,3));
@@ -131,6 +154,13 @@ document.addEventListener('keydown',e=>{
   if(menuOpen || dead)return;
   if(e.code==='KeyV' && !e.repeat)thirdPerson=!thirdPerson;
   if(e.code==='KeyG' && !e.repeat){const label=chisel.cycleShape();ui.toast(`CHISEL · ${label.toUpperCase()} · LEFT CARVE · RIGHT STAMP`);}
+  if(e.code==='KeyF' && !e.repeat){
+    // Consumables live in the hotbar: bandages patch you up, raw morsels are
+    // meager nosh. Selecting the item and pressing F is the whole system.
+    const held=inventory.selectedItem();
+    if(held?.id===Block.Bandage){health=clamp(health+25,0,100);inventory.remove(Block.Bandage,1);ui.toast('THE BANDAGE PULLS THE HURT TIGHT');audio.event('break');}
+    else if(held?.id===Block.Morsel){health=clamp(health+7,0,100);inventory.remove(Block.Morsel,1);ui.toast('Raw and chewy. It helps. A little.');audio.event('break');}
+  }
   if(e.code==='Space'){e.preventDefault();if(!e.repeat)jumpQueued=true;}
   if(/^Digit[1-9]$/.test(e.code))inventory.selected=Number(e.code.slice(5))-1;
   keys.add(e.code);
@@ -159,10 +189,10 @@ renderer.domElement.addEventListener('mousedown',e=>{
       }
       return;
     }
-    if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,meleeDamage(effectiveTier(inventory.toolTier,inventory.beam),inventory.weapon?24:12),(pos,kind)=>{
-      // A dead mob drops a raw morsel. Heavier kinds drop more.
-      const count=kind==='cresthorn'?4:kind==='crawler'||kind==='stalker'||kind==='thrasher'?2:1;
-      for(let i=0;i<count;i++) loot.spawn(Block.Morsel,pos.clone().setY(pos.y+.4),1);
+    if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,meleeDamage(effectiveTier(inventory.toolTier,inventory.beam),inventory.weapon?24:12,inventory.edgeBonus),(pos,kind)=>{
+      // Creature loot is keyed by anatomy (see CREATURE_DROPS).
+      const list=CREATURE_DROPS[kind]??[[Block.Morsel,1] as [Block,number]];
+      for(const [id,n] of list)for(let i=0;i<n;i++)loot.spawn(id,pos.clone().setY(pos.y+.4),1);
     })){audio.event('hit');return;}
     if(hit){
       // Forage first: clicking the ground a plant grows from gathers the
@@ -219,7 +249,13 @@ const DEATH_CAUSES: Record<DamageSource, string> = {
   hazard: 'THE LAND ITSELF DRANK YOUR LIFE.',
   unknown: 'IT WAS SOMETHING ELSE.',
 };
-function damage(n:number, source:DamageSource='unknown'){if(dead||!started)return;health=clamp(health-n,0,100);audio.event('hurt');overlay.recordDamage({t:time,source,amount:n,y:player.position.y,biome:activeBiome});if(health<=0){dead=true;deathTimer=3;ui.setDeath(true,DEATH_CAUSES[source]);keys.clear();}}
+function damage(n:number, source:DamageSource='unknown'){
+  if(dead||!started)return;
+  // Creature gear blunts specific incoming sources: the chitin cuirass covers
+  // enemy strikes; the hide guard covers land hazards and lightning.
+  if(source==='enemy'&&inventory.armored)n*=.65;
+  else if((source==='hazard'||source==='lightning')&&inventory.hideGuarded)n*=.5;
+  health=clamp(health-n,0,100);audio.event('hurt');overlay.recordDamage({t:time,source,amount:n,y:player.position.y,biome:activeBiome});if(health<=0){dead=true;deathTimer=3;ui.setDeath(true,DEATH_CAUSES[source]);keys.clear();}}
 function respawn(){dead=false;health=sanity=stamina=100;gravity=1;player.position.copy(spawn);player.verticalVelocity=0;enemies.clear();critters.clear();loot.clear();ui.setDeath(false);}
 let restoration=false, lit=false,restoreTimer=0;
 function strike(){const angle=Math.random()*Math.PI*2,r=Math.random()*30,x=Math.floor(player.position.x+Math.cos(angle)*r),z=Math.floor(player.position.z+Math.sin(angle)*r),y=world.surface(x,z)+1;flash.position.set(x,y+5,z);flash.intensity=100;flashTimer=.18;audio.event('thunder');if(Math.hypot(player.position.x-x,player.position.y-y,player.position.z-z)<3)damage(20,'lightning');for(let dx=-2;dx<=2;dx++)for(let dy=-2;dy<=2;dy++)for(let dz=-2;dz<=2;dz++)if(dx*dx+dy*dy+dz*dz<=4 && world.get(x+dx,y+dy,z+dz)===Block.Wood)world.set(x+dx,y+dy,z+dz,Block.Scorched);}
@@ -237,6 +273,15 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
     const targetColor=new THREE.Color(colors[activeBiome]).multiplyScalar(underground?1:.4+.6*dayLevel);(scene.background as THREE.Color).lerp(targetColor,Math.min(1,dt*1.5));fog.color.lerp(targetColor,Math.min(1,dt*1.5));fog.density=THREE.MathUtils.lerp(fog.density,activeBiome==='catacombs'?.08:activeBiome==='storm'?.048:.027,Math.min(1,dt));
     ambient.intensity=(activeBiome==='catacombs'?.20:activeBiome==='veins'?.30:.98)*(underground?1:.55+.45*dayLevel);sun.intensity=(activeBiome==='catacombs'?.08:activeBiome==='storm'?.25:1.0)*(underground?1:.45+.55*dayLevel);
     const sunAngle=(dayPhase_-.25)*Math.PI*2;sun.position.set(Math.cos(sunAngle)*28,Math.max(9,Math.sin(sunAngle)*30+12),16);
+    // --- Canopy gloom ---
+    // When the player stands under cover (canopy, roof, overhang) the world
+    // visibly closes in: lights dim, the shader adds a cool patina of gloom.
+    // Underground biomes handle their own darkness and skip this layer.
+    const shaded=!underground&&shadeAt(world,p.x,p.y,p.z);
+    gloomLevel=THREE.MathUtils.lerp(gloomLevel,shaded?.55:0,Math.min(1,dt*2.5));
+    ambient.intensity*=1-gloomLevel*.5;
+    sun.intensity*=1-gloomLevel*.35;
+    post.uniforms.uGloom.value=gloomLevel;
     if(activeBiome==='glitch'){gravityTimer-=dt;if(gravityTimer<=0){gravityTimer=3;gravity=[.5,1,1.5][Math.floor(Math.random()*3)];audio.event('shift');}}else{gravity=1;gravityTimer=0;}
     const exposed=p.y>world.surface(Math.floor(p.x),Math.floor(p.z));
     if(activeBiome==='storm'&&exposed){lightningTimer-=dt;if(lightningTimer<=0){strike();lightningTimer=5+Math.random()*5;}} else lightningTimer=6;
@@ -281,6 +326,16 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
     } else {highlight.visible=false;cellOutline.visible=false;}
     ui.tick(dt);
     camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));camera.position.add(back);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
+    // Felled-tree impact: position jitter plus a slight roll kick, decaying fast
+    // so it reads as a ground punch rather than a wobble.
+    if(shakeTimer>0){
+      shakeTimer-=dt;
+      const s=shakeTimer*shakeTimer*4*.5;
+      camera.position.x+=(Math.random()-.5)*s;
+      camera.position.y+=(Math.random()-.5)*s*.5;
+      camera.position.z+=(Math.random()-.5)*s;
+      camera.rotation.z+=(Math.random()-.5)*s*.18;
+    }
     if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id,x,y,z)=>{inventory.add(id);audio.event('break');timber.notify(x,y,z,player.position);if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier);}
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
@@ -309,10 +364,10 @@ function captureSave() {
   return {
     player: { x: player.position.x, y: player.position.y, z: player.position.z, health, sanity, stamina },
     inventory: serializeInventory(inventory.slots),
-    progression: { weapon: inventory.weapon, beam: inventory.beam, hasGravity: powerups.hasGravity, hasPlatform: powerups.hasPlatform, toolTier: inventory.toolTier, toolDurability: inventory.toolDurability },
+    progression: { weapon: inventory.weapon, beam: inventory.beam, hasGravity: powerups.hasGravity, hasPlatform: powerups.hasPlatform, toolTier: inventory.toolTier, toolDurability: inventory.toolDurability, armored: inventory.armored, hideGuarded: inventory.hideGuarded, edgeBonus: inventory.edgeBonus },
   };
 }
-function applySave(data: ReturnType<typeof captureSave>): void {
+function applySave(data: SaveData): void {
   player.position.set(data.player.x, data.player.y, data.player.z);
   player.verticalVelocity = 0;
   health = clamp(data.player.health, 0, 100);
@@ -325,6 +380,9 @@ function applySave(data: ReturnType<typeof captureSave>): void {
   powerups.hasPlatform = data.progression.hasPlatform;
   inventory.toolTier = data.progression.toolTier ?? 0;
   inventory.toolDurability = data.progression.toolDurability ?? 0;
+  inventory.armored = data.progression.armored ?? false;
+  inventory.hideGuarded = data.progression.hideGuarded ?? false;
+  inventory.edgeBonus = data.progression.edgeBonus ?? 0;
 }
 function doSave(): void {
   const outcome = writeSave(captureSave());

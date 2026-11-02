@@ -4,7 +4,7 @@ import * as forest from './forest';
 import type { TreeShape, TreeCell } from './forest';
 import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
 
-export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem, Leaf }
+export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem, Leaf, Chitin, Silk, Hide, Claw, Bandage }
 
 /** The display colour of a block type, used by pickups and other decorations. */
 export function blockColor(id: Block): number {
@@ -89,6 +89,9 @@ const colors: Record<number, number> = {
   [Block.BladeHead]: 0x9fb4c4,
   // Fallback leaf colour; per-cell canopy tints come from forest.leafTint.
   [Block.Leaf]: 0x9980c6,
+  // Creature materials and the consumables they craft.
+  [Block.Chitin]: 0x9ab58e, [Block.Silk]: 0xd9d2ec, [Block.Hide]: 0x93735f,
+  [Block.Claw]: 0xe4dcc4, [Block.Bandage]: 0xf0ece2,
 };
 // Each face is counter-clockwise as seen from outside the block.
 const faces = [
@@ -240,6 +243,8 @@ export class World {
           }
         }
         if (tree.cell.kind === 'fruit') return Block.Skyfruit;
+        // Branch stubs are wood the player can chip off the bare trunk.
+        if (tree.cell.kind === 'branch') return Block.Wood;
         return Block.Leaf;
       }
       return Block.Air;
@@ -429,7 +434,7 @@ export class World {
         || ((id === Block.Wood || id === Block.Glitch || id === Block.Bone || id === Block.Flesh) && y > this.surface(x, z));
       const treeHit = inTreeBand ? this.treeAtVoxel(x, y, z) : null;
       if (treeHit) {
-        if (treeHit.cell.kind === 'trunk') {
+        if (treeHit.cell.kind === 'trunk' || treeHit.cell.kind === 'branch') {
           const t = forest.trunkTint(treeHit.shape, y);
           color.setRGB(t[0], t[1], t[2]);
         } else {
