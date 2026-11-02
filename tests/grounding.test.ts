@@ -40,6 +40,32 @@ describe('critters stay near the ground', () => {
   });
 });
 
+describe('critters roam without spinning in place', () => {
+  // Regression: the movement probe used a fixed +.2 above the origin, which
+  // dipped into the ground cell for moths/dragonflies (their origins ease
+  // down to the surface line). Every frame then read "blocked" and the
+  // collision turn spun them 90°/frame — the entity flickered like two.
+  it('a moth on flat ground actually moves and does not flip every frame', () => {
+    const scene = new THREE.Scene();
+    const real = new World(scene);
+    const flat: Pick<World, 'get' | 'surface'> = {
+      get: (x, y, z) => real.get(x, y, z),
+      surface: () => real.surface(0, 0), // flat spawn plateau, no steps
+    };
+    const critters = new Critters(scene, flat);
+    const origin = new THREE.Vector3(0.5, flat.surface(0, 0) + 1, 0.5);
+    critters.spawn('overcast', origin); // moth
+    const player = new THREE.Vector3(20, 0, 20); // far: wander, no flee
+    for (let i = 0; i < 90; i++) critters.update(1 / 60, player, 'overcast');
+    const p = critters.positions()[0];
+    // The bug signature was zero translation plus a 90°/frame collision turn;
+    // a healthy wanderer covers ground.
+    const travelled = Math.hypot(p.x - origin.x, p.z - origin.z);
+    expect(travelled, 'a free moth must actually travel, not pin in place').toBeGreaterThan(0.4);
+    real.dispose();
+  });
+});
+
 describe('trees are rooted, collidable voxel woodland', () => {
   it('gives every tree a trunk on the ground and a solid canopy above it', () => {
     // Use the REAL surface noise so base heights agree with world.get().

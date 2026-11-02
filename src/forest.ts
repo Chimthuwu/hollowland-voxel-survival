@@ -256,17 +256,28 @@ export function collectTrees(
     // Open woodland: one tree per ~2.5% of ground columns, well-spaced so
     // trunks stay visible between canopy discs.
     if (hash(gx * 1.13, gz * 3.71) > .45) continue;
-    const tx = gx * G + Math.floor(hash(gx * 7.31, gz * 5.17) * G);
-    const tz = gz * G + Math.floor(hash(gx * 2.93, gz * 8.77) * G);
-    if (isProtected(tx, tz)) continue;
-    const h = surface(tx, tz);
-    const biome = biomeOf(tx, h, tz);
-    if (!treeGrowsIn(biome)) continue;
-    trees.push(makeTree(tx, tz, h + 1, biome));
+    // The candidate root is jittered; when terrain geology rejects a column
+    // (the land type is sand), retry a couple of neighbours inside the same
+    // cell so woodland thins out at biome edges instead of vanishing there.
+    const jx = gx * G + Math.floor(hash(gx * 7.31, gz * 5.17) * G);
+    const jz = gz * G + Math.floor(hash(gx * 2.93, gz * 8.77) * G);
+    const fallbacks: Array<[number, number]> = [[jx, jz], [jx + 2, jz + 1], [jx - 1, jz + 2], [jx + 1, jz - 2]];
+    let placed = false;
+    for (const [tx, tz] of fallbacks) {
+      if (isProtected(tx, tz)) continue;
+      const h = surface(tx, tz);
+      const biome = biomeOf(tx, h, tz);
+      if (!treeGrowsIn(biome)) continue;
+      trees.push(makeTree(tx, tz, h + 1, biome));
+      placed = true;
+      break;
+    }
+    if (!placed) continue;
     // Sparse irregular second tree overhanging the same grid cell.
     if (hash(gx * 4.17, gz * 1.93) < .08) {
-      const jx = tx + Math.floor(hash(gx * 9.1, gz * 2.2) * 3) - 1;
-      const jz = tz + Math.floor(hash(gx * 3.3, gz * 7.7) * 3) - 1;
+      const [sx, sz] = fallbacks[0];
+      const jx = sx + Math.floor(hash(gx * 9.1, gz * 2.2) * 3) - 1;
+      const jz = sz + Math.floor(hash(gx * 3.3, gz * 7.7) * 3) - 1;
       if (!isProtected(jx, jz)) {
         const h2 = surface(jx, jz);
         const b2 = biomeOf(jx, h2, jz);

@@ -4,7 +4,7 @@ import * as forest from './forest';
 import type { TreeShape, TreeCell } from './forest';
 import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
 
-export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem, Leaf, Chitin, Silk, Hide, Claw, Bandage }
+export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem, Leaf, Chitin, Silk, Hide, Claw, Bandage, Sand, Snow, Water }
 
 /** The display colour of a block type, used by pickups and other decorations. */
 export function blockColor(id: Block): number {
@@ -25,7 +25,9 @@ export function biomeAt(x: number, y: number, _z: number): Biome {
 }
 
 const SIZE = 16;
-const RADIUS = 2;
+// Loaded chunk radius: 3 gives a 96-block thread of world visible each way
+// (was 2), matched with the lighter fog so distance finally reads.
+const RADIUS = 3;
 const VERTICAL_RADIUS = 1;
 const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
 const chunkCoord = (v: number) => Math.floor(v / SIZE);
@@ -69,15 +71,81 @@ export const ENTRANCES: ReadonlyArray<readonly [number, number, number, number]>
   [-18, -52, -1, 0], [72, 34, 1, 1], [116, -14, 0, -1],
 ];
 
+// ---------------------------------------------------------------------------
+// TERRAIN GEOLOGY (terrain variety)
+//
+// The biome strips run along +X and are a *biome* identity; separately the
+// land is shaped by a broad low-frequency geology field with its own texture:
+//   plains  — the gentle rolling ground the game always had
+//   desert  — drift sand; dead ground, no trees, no ground flora, no water
+//   hills   — rocky rising ground, stone cover, no trees but grass creeps in
+//   mountain— high stone massifs with snow caps; the most visually imposing
+// Two independent noise octaves make regions big and borders ragged so
+// transitions feel organic instead of chessboard.
+// ---------------------------------------------------------------------------
+const GEO_SCALE = 118;   // broad terrain blotches, kilometres apart
+const GEO_DETAIL = 46;   // refining octave that raggedly eats the borders
+const DESERT_BAND = .32; // base field below this is drift sand
+const HILL_BAND = .44;   // plains sits between desert and hills
+const MOUNTAIN_BAND = .68; // base field above this rises into peaks
+
+/**
+ * The terrain archetype under a column, independent of the along-X biome
+ * strips: where the land is sand, where it is rock, where it is high
+ * mountain. A broad octave picks the region; a refining octave cuts the
+ * borders up so transitions raggedly interlock instead of chessboarding.
+ */
+export function terrainKindAt(x: number, z: number): TerrainKind {
+  const base = noise(x / GEO_SCALE + 71, z / GEO_SCALE + 71);
+  const detail = noise(x / GEO_DETAIL + 133, z / GEO_DETAIL + 133);
+  // Mountains and desert harden their edge where the detail octave agrees.
+  const shoulder = base > MOUNTAIN_BAND - .05 && detail > .55;
+  const duneEdge = base < .38 && detail < .4;
+  if (base > MOUNTAIN_BAND || shoulder) return detail > .5 ? 'mountain' : 'hills';
+  if (base < DESERT_BAND || duneEdge) return 'desert';
+  const hilly = noise(x / GEO_SCALE + 311, z / GEO_SCALE + 311);
+  return hilly > .58 ? 'hills' : 'plains';
+}
+
+/** True when a column is open enough for trees: grassy plains and rocky
+ *  hills both carry woodland; bare sand, mountain stone and water do not. */
+function treesAllowedAt(x: number, z: number) {
+  const kind = terrainKindAt(x, z);
+  return (kind === 'plains' || kind === 'hills') && waterBodyAt(x, z) === 0;
+}
+
+/**
+ * The water body at a column: 0 dry, 1 river, 2 lake. Deterministic
+ * generation-space data — it never consults the block grid, so surface(),
+ * get() and the flora/tree gates can all ask it cheaply.
+ *
+ * Rivers wander as distance-to-curve fields in their own noise octaves; lakes
+ * are broad blobs where a low-frequency field dips under LAKE_BAND. Spawn,
+ * entrance mouths and the ramp head regions stay dry on purpose.
+ */
+function waterBodyAt(x: number, z: number): WaterBody {
+  if (Math.abs(x) <= 14 && Math.abs(z) <= 14) return 0;          // spawn clarity
+  for (const [ex, ez] of ENTRANCES) if (Math.max(Math.abs(x - ex), Math.abs(z - ez)) <= 4) return 0;
+  if (terrainKindAt(x, z) === 'desert') return 0;                // dead sand: no water
+  // River A: a broad band wandering along X (its centre z is a noise curve).
+  const centre1 = 24 * noise(x / 50 + 911, 371) - 12;
+  if (Math.abs(z - centre1) < 2.4) return 1;
+  // River B: the same idea along Z, crossing river A past the spawn region.
+  const centre2 = 30 * noise(279, z / 60 + 817) - 15;
+  if (Math.abs(x - centre2) < 2.2) return 1;
+  // Lakes: deep dips of the broad field pool into water anywhere else.
+  if (noise(x / 90 + 515, z / 90 + 515) < LAKE_BAND) return 2;
+  return 0;
+}
 const colors: Record<number, number> = {
   [Block.Dirt]: 0x8a5a4e, [Block.Stone]: 0x555761, [Block.Wood]: 0x4a3935,
-  [Block.Mud]: 0x373a3c, [Block.Glitch]: 0x843c8b, [Block.Flesh]: 0x9f4e59,
+  [Block.Mud]: 0x373a3c, [Block.Glitch]: 0xc02dd4, [Block.Flesh]: 0xc4545f,
   [Block.Bone]: 0xbeb09b, [Block.Torch]: 0xf7a44b, [Block.Scaffold]: 0x6e6355,
   [Block.Totem]: 0x7b423e, [Block.Scorched]: 0x28252a,
   [Block.Crystal]: 0x6fe0d0,
   [Block.GravityCharm]: 0xc7b3ff,
   [Block.PlatformSeed]: 0x8fe6c0,
-  [Block.Acid]: 0x9fd23a,
+  [Block.Acid]: 0xc4f23a,
   [Block.Grass]: 0x7fa668,
   [Block.Skyfruit]: 0x6fc4ff,
   [Block.Morsel]: 0xd88f7a,
@@ -92,7 +160,28 @@ const colors: Record<number, number> = {
   // Creature materials and the consumables they craft.
   [Block.Chitin]: 0x9ab58e, [Block.Silk]: 0xd9d2ec, [Block.Hide]: 0x93735f,
   [Block.Claw]: 0xe4dcc4, [Block.Bandage]: 0xf0ece2,
+  // Terrain-variety blocks: pale drift sand, cold-capped peaks and storm
+  // rivers. Water keeps an opaque dark teal so the cheap voxel look holds.
+  [Block.Sand]: 0xcbb98a, [Block.Snow]: 0xe9eef2, [Block.Water]: 0x1e4f66,
 };
+
+/** Water sits at or below this surface cell; river beds carve down under it. */
+export const WATER_LEVEL = 4;
+
+type TerrainKind = 'plains' | 'desert' | 'hills' | 'mountain';
+
+// ---------------------------------------------------------------------------
+// WATER
+//
+// Two wandering rivers and pooled lake basins, as block data: Water blocks
+// fill a column up to WATER_LEVEL wherever the body noise says "wet". River
+// beds carve the terrain down so water sits embedded in the land, and spawn /
+// entrance / shaft regions are kept dry. Water is non-solid: the player swims
+// (see main.ts) and cannot mine it.
+// ---------------------------------------------------------------------------
+const LAKE_BAND = .17;  // lake-field below this pools into water
+
+type WaterBody = 0 | 1 | 2; // 0 dry, 1 river, 2 lake
 // Each face is counter-clockwise as seen from outside the block.
 const faces = [
   { n: [1, 0, 0], v: [[1,0,0],[1,1,0],[1,1,1],[1,0,1]], shade: .82 },
@@ -193,11 +282,26 @@ export class World {
     if (this.chunks.has(key(cx, cy, cz))) this.buildChunk(cx, cy, cz);
   }
 
+  /**
+   * NOTE: `topGround` and the flora pass call `surface()` for the pre-edit
+   * ground line; the natural-mouth carve lives only in get(), so the mouth
+   * itself reads as a hole in the real block data the player collides with.
+   */
   surface(x: number, z: number): number {
     x = Math.floor(x); z = Math.floor(z);
     // Keep the immediate spawn gently level and deterministic.
     if (Math.abs(x) < 6 && Math.abs(z) < 6) return 5;
-    return Math.floor(4 + noise(x / 30, z / 30) * 5 + noise(x / 9, z / 9) * 2);
+    let h = 4 + noise(x / 30, z / 30) * 5 + noise(x / 9, z / 9) * 2;
+    // Terrain-variety shaping on top of the gentle base: rocky country lifts
+    // into stone hills, mountains mass up high, desert flattens into drifting
+    // dunes and water bodies carve their bed below the water surface.
+    const kind = terrainKindAt(x, z);
+    if (kind === 'mountain') h += 5 + noise(x / 34 + 99, z / 34 + 99) * 11;
+    else if (kind === 'hills') h += 2 + noise(x / 26 + 71, z / 26 + 71) * 4;
+    else if (kind === 'desert') h = 4 + noise(x / 17 + 43, z / 17 + 43) * 3;
+    const body = waterBodyAt(x, z);
+    if (body !== 0) h = Math.min(h, WATER_LEVEL - 3 - (body === 2 ? Math.floor(noise(x / 12 + 7, z / 12 + 7) * 2) : 0));
+    return Math.floor(h);
   }
 
   private shaftCells: Set<string> | null = null;
@@ -247,10 +351,20 @@ export class World {
         if (tree.cell.kind === 'branch') return Block.Wood;
         return Block.Leaf;
       }
+      // Rivers and lakes: open water above the carved bed, under the sky.
+      // (Non-solid — main.ts lets the player swim through Water blocks.)
+      if (waterBodyAt(x, z) !== 0 && y <= WATER_LEVEL) return Block.Water;
       return Block.Air;
     }
     // Surface entrances carve walkable shafts through anything below them.
     if (y <= height && this.getShaftCells().has(key(x, y, z))) return Block.Air;
+    // Natural cave mouths: a funnel cone carved from the surface down, a
+    // narrow shaft that continues below it and a pocket chamber that opens
+    // into the cavern layer — sinkholes a player can literally fall into.
+    if (y <= height) {
+      const mouth = this.caveMouthAt(x, y, z);
+      if (mouth) return Block.Air;
+    }
     if (y < -3) {
       // Keep the ground beneath spawn solid so the player never falls in at the start.
       const spawnDist = Math.hypot(x, z);
@@ -276,10 +390,24 @@ export class World {
         const ore = noise3(x / 11 + 5, y / 9 + 23, z / 11 + 13);
         if (ore > .80) return Block.EchoGem;
       }
+      // Under water bodies the bed stays sealed: solid rock above the top of
+      // the cavern field so swimmers never punch a hole into the caves.
+      if (waterBodyAt(x, z) !== 0 && y >= height - 4) return Block.Stone;
       return y < -24 && noise(x / 13, z / 13 + y / 17) > .66 ? Block.Bone : Block.Stone;
     }
     const biome = biomeAt(x, height, z);
     if (y < height - 3) return Block.Stone;
+    // River/lake beds: pale sediment instead of turf.
+    if (waterBodyAt(x, z) !== 0 && y >= height - 2) return Block.Sand;
+    // Terrain geology gives the surface band its regional character: sand in
+    // the desert, bare stone on hills, rock with snow caps on mountains. The
+    // biome strips keep their signature grounds where plain country remains.
+    const kind = terrainKindAt(x, z);
+    if (kind !== 'plains' && biome === 'overcast') {
+      if (kind === 'desert') return Block.Sand;
+      if (kind === 'mountain') return y >= height - 2 ? Block.Snow : Block.Stone;
+      return y >= height - 1 ? Block.Stone : Block.Dirt;
+    }
     switch (biome) {
       case 'storm': return Block.Mud;
       case 'glitch': return y === height || noise(x / 5, z / 5) > .67 ? Block.Glitch : Block.Stone;
@@ -294,6 +422,54 @@ export class World {
 
   /** Tree shapes cached per XZ chunk region, built lazily on first query. */
   private readonly treesByRegion = new Map<number, TreeShape[]>();
+
+  // --- Natural cave mouths -------------------------------------------------
+  // Deterministic, jittered per-cell spots where the surface opens into the
+  // cavern layer: a funnel cone carved from ground level, a narrow drop shaft
+  // below it and a rounded pocket chamber that actually connects to caves.
+  // Unlike the ENTRANCE staircases these are hazards — no rails, no ramp.
+
+  private readonly mouthSpots = new Map<string, { cx: number; cz: number; top: number } | null>();
+
+  /** The sinkhole (if any) hosted by one 14-cell geological grid cell. */
+  private mouthForCell(gx: number, gz: number): { cx: number; cz: number; top: number } | null {
+    const k = `${gx},${gz}`;
+    const cached = this.mouthSpots.get(k);
+    if (cached !== undefined) return cached;
+    let out: { cx: number; cz: number; top: number } | null = null;
+    // Roughly one quarter of the cells host a mouth, jittered inside the cell.
+    if (hash(gx * 209 + 7, gz * 131 + 17) > .74) {
+      const cx = gx * 14 + 2 + Math.floor(hash(gx + 31, gz * 5 + 3) * 10);
+      const cz = gz * 14 + 2 + Math.floor(hash(gx * 5 + 71, gz + 43) * 10);
+      let nearEntrance = false;
+      for (const [ex, ez] of ENTRANCES) if (Math.max(Math.abs(cx - ex), Math.abs(cz - ez)) <= 5) nearEntrance = true;
+      const top = this.surface(cx, cz);
+      // Never open a sinkhole in the spawn clearing or under an entrance ramp.
+      if (!this.isProtectedSpot(cx, cz) && !nearEntrance
+        && waterBodyAt(cx, cz) === 0 && terrainKindAt(cx, cz) !== 'desert' && top >= 4 && top <= 14)
+        out = { cx, cz, top };
+    }
+    this.mouthSpots.set(k, out);
+    return out;
+  }
+
+  /** True when (x,y,z) falls inside a nearby cave-mouth funnel/shaft/chamber. */
+  private caveMouthAt(x: number, y: number, z: number): boolean {
+    const gx = Math.floor(x / 14), gz = Math.floor(z / 14);
+    for (let ax = gx - 1; ax <= gx + 1; ax++) for (let az = gz - 1; az <= gz + 1; az++) {
+      const m = this.mouthForCell(ax, az);
+      if (!m) continue;
+      const dx = x - m.cx, dz = z - m.cz;
+      // The surface funnel: radius shrinks with depth — 3.1 wide at the rim.
+      const d = m.top - y;
+      if (d >= 0 && d <= 6 && dx * dx + dz * dz <= (3.1 - d * .37) ** 2) return true;
+      // The drop shaft continues the funnel down to the pocket chamber.
+      if (y > -11 && y <= m.top && dx * dx + dz * dz <= 1.1) return true;
+      // The chamber: a rounded pocket at the bottom of the shaft.
+      if (y >= -11 && y <= -5 && dx * dx + (y + 8) * (y + 8) + dz * dz <= 6.8) return true;
+    }
+    return false;
+  }
 
   /** Spawn clarity, cave-entrance mouths and entrance ramps stay tree-free. */
   private isProtectedSpot(x: number, z: number): boolean {
@@ -310,7 +486,7 @@ export class World {
     const x0 = tcx * SIZE, z0 = tcz * SIZE;
     // Canopy reach: a tree rooted up to 4 cells outside can touch this region.
     const all = forest.collectTrees(x0 - 4, x0 + SIZE + 3, z0 - 4, z0 + SIZE + 3,
-      (x, z) => this.surface(x, z), biomeAt, (x, z) => this.isProtectedSpot(x, z));
+      (x, z) => this.surface(x, z), biomeAt, (x, z) => this.isProtectedSpot(x, z) || !treesAllowedAt(x, z));
     const rx0 = x0, rx1 = x0 + SIZE - 1, rz0 = z0, rz1 = z0 + SIZE - 1;
     const list = all.filter(t => Math.max(t.tx - 4, rx0) <= Math.min(t.tx + 4, rx1)
       && Math.max(t.tz - 4, rz0) <= Math.min(t.tz + 4, rz1));
@@ -321,12 +497,22 @@ export class World {
   /** The tree and cell occupying a voxel, or null for non-tree voxels. */
   treeAtVoxel(x: number, y: number, z: number): { shape: TreeShape; cell: TreeCell } | null {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
-    if (y <= this.surface(x, z)) return null; // trees live above ground
+    // Trees never root below the gentle ground line; the cheap y-floor keeps
+    // the cavern-heavy calls out of the per-shape scan.
+    if (y < 5) return null;
+    let first: { shape: TreeShape; cell: TreeCell } | null = null;
     for (const shape of this.treesForRegion(Math.floor(x / SIZE), Math.floor(z / SIZE))) {
+      if (y < shape.baseY) continue; // strictly below the root of this tree
       const cell = forest.cellInTree(shape, x, y, z);
-      if (cell) return { shape, cell };
+      if (!cell) continue;
+      // A tree always owns its own trunk column. Overlapping neighbours (root
+      // flares, canopies) otherwise flip the owner by region-list order, which
+      // made chopping one tree's base fell a *different* tree and strand its
+      // cells in the world.
+      if (shape.tx === x && shape.tz === z) return { shape, cell };
+      if (!first) first = { shape, cell };
     }
-    return null;
+    return first;
   }
 
   /** True if (x,y,z) is one of the mineable trunk cells of a procedural tree. */
@@ -399,8 +585,12 @@ export class World {
     );
     const cx = chunkCoord(position.x), cy = chunkCoord(position.y), cz = chunkCoord(position.z);
     const wanted: Array<{x: number; y: number; z: number; score: number}> = [];
+    // Full square around the player, not a circular disc: with the fog now
+    // light, a disc's corners read as dark background-coloured rectangles at
+    // the world edge whenever the player faces a diagonal — the voids can
+    // even shear and pop as the camera turns. A square costs more chunks but
+    // the edge stays an even, fogged horizon in every direction.
     for (let dx = -RADIUS; dx <= RADIUS; dx++) for (let dz = -RADIUS; dz <= RADIUS; dz++) {
-      if (dx * dx + dz * dz > RADIUS * RADIUS) continue;
       for (let dy = -VERTICAL_RADIUS; dy <= VERTICAL_RADIUS; dy++) wanted.push({ x: cx + dx, y: cy + dy, z: cz + dz, score: dx * dx + dz * dz + Math.abs(dy) * .6 });
     }
     const keep = new Set(wanted.map(c => key(c.x, c.y, c.z)));
@@ -491,7 +681,15 @@ export class World {
       if (g === undefined) { g = this.topGround(x, z); anchor.set(k, g); }
       return g;
     };
-    appendUndergrowth(foliageBuffers, cx, cy, cz, groundOf, biomeAt, (x, z) => this.foraged.has(`flora,${x},${z}`));
+    appendUndergrowth(foliageBuffers, cx, cy, cz, groundOf, biomeAt, (x, z) =>
+      this.foraged.has(`flora,${x},${z}`)
+      // Geology: dead sand and mountain stone carry no flora (rocky hills
+      // keep their sparse grasses), and nothing grows out of a river or lake
+      // bed or a carved cave mouth.
+      || terrainKindAt(x, z) === 'desert'
+      || terrainKindAt(x, z) === 'mountain'
+      || waterBodyAt(x, z) !== 0
+      || this.caveMouthAt(x, this.surface(x, z) - 1, z));
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));

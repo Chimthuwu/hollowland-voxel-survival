@@ -8,7 +8,9 @@ describe('tree look', () => {
   it('hangs skyfruit under the canopy of overcast trees', () => {
     const world = new World(new THREE.Scene());
     const trees = collectTrees(12, 90, -90, 90, (x, z) => world.surface(x, z), biomeAt, () => false);
-    const t = trees.find(tree => tree.tx >= 0 && tree.tz >= 0 && biomeAt(tree.tx, tree.baseY, tree.tz) === 'overcast');
+    // Geology-gated: only pick a tree whose trunk actually rendered as Wood.
+    const t = trees.find(tree => tree.tx >= 0 && tree.tz >= 0 && biomeAt(tree.tx, tree.baseY, tree.tz) === 'overcast'
+      && world.get(tree.tx, tree.baseY, tree.tz) === Block.Wood);
     expect(t).toBeDefined();
     let fruit = 0;
     for (let y = t!.baseY; y <= t!.topY; y++)
@@ -23,7 +25,9 @@ describe('tree look', () => {
   it('trunks carry branch stubs; chipping a stub yields wood WITHOUT felling', () => {
     const world = new World(new THREE.Scene());
     const trees = collectTrees(12, 90, -90, 90, (x, z) => world.surface(x, z), biomeAt, () => false);
-    const t = trees.find(tree => tree.tx >= 0 && tree.tz >= 0 && biomeAt(tree.tx, tree.baseY, tree.tz) === 'overcast');
+    // Geology-gated: only pick a tree whose trunk actually rendered as Wood.
+    const t = trees.find(tree => tree.tx >= 0 && tree.tz >= 0 && biomeAt(tree.tx, tree.baseY, tree.tz) === 'overcast'
+      && world.get(tree.tx, tree.baseY, tree.tz) === Block.Wood);
     expect(t).toBeDefined();
     let stub: [number, number, number] | null = null;
     for (let y = t!.baseY; y <= t!.topY && !stub; y++)

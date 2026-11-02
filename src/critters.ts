@@ -8,6 +8,9 @@ type Critter = {
   kind: Kind;
   heading: number;
   retarget: number;
+  /** Cooldown before another collision reorient, so a walled-in critter
+   *  shuffles instead of spinning 90° every frame. */
+  turnT: number;
   flap: number;
   speed: number;
   vy: number;
@@ -217,6 +220,7 @@ export class Critters {
       root, kind,
       heading: Math.random() * Math.PI * 2,
       retarget: 2,
+      turnT: 0,
       flap: Math.random() * 6,
       speed,
       vy: 0,
@@ -252,7 +256,20 @@ export class Critters {
       else if (m.retarget <= 0) { m.heading += (Math.random() - .5) * 1.8; m.retarget = 1.5 + Math.random() * 2.5; }
       const pace = dist < 3 ? m.speed * 2.2 : m.speed;
       const nx = p.x + Math.sin(m.heading) * pace * dt, nz = p.z + Math.cos(m.heading) * pace * dt;
-      if (this.world.get(nx, p.y + .2, nz) === 0) { p.x = nx; p.z = nz; } else m.heading += Math.PI * .5;
+      // Probe the cell the BODY actually occupies. Each kind carries its body
+      // at a different height above the origin (beetle ~.3, moth ~1.4,
+      // dragonfly ~1.7); the old fixed +.2 probe dipped into the ground cell
+      // for the low-flying kinds, read "blocked" every frame and the collision
+      // turn spun them 90°/frame — the "two entities" flicker.
+      const lift = m.kind === 'beetle' ? .2 : m.kind === 'moth' ? 1.4 : 1.7;
+      if (this.world.get(nx, p.y + lift, nz) === 0) { p.x = nx; p.z = nz; m.turnT = 0; }
+      else if (dist >= 3) {
+        // Genuinely walled in: reorient on a cooldown. Within 3 blocks the
+        // heading is re-aimed away from the player every frame anyway, so a
+        // cornered critter just stands and faces out rather than jittering.
+        m.turnT -= dt;
+        if (m.turnT <= 0) { m.heading += Math.PI * .5; m.turnT = .4; }
+      }
       m.root.rotation.y = m.heading;
       if (m.kind === 'beetle') {
         const ground = this.world.surface(p.x, p.z) + 1;

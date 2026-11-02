@@ -29,6 +29,10 @@ const M = (hardness: number, tier: number, soft = false): MiningSpec => ({ hardn
 export const MINING: Partial<Record<Block, MiningSpec>> = {
   [Block.Dirt]:      M(15, 0, true),
   [Block.Grass]:     M(15, 0, true),
+  [Block.Sand]:      M(12, 0, true),
+  [Block.Snow]:      M(10, 0, true),
+  // Water is not mineable: any tier still refuses it below the soft floor.
+  [Block.Water]:     M(9999, 99),
   [Block.Wood]:      M(18, 0, true),
   [Block.Mud]:       M(22, 0, true),
   [Block.Scaffold]:  M(16, 0, true),
@@ -77,6 +81,7 @@ export function effectiveTier(toolTier: number, hasBeam: boolean): number {
  * the HUD can tell the player what they are missing.
  */
 export function canBreak(id: Block, tier: number): { ok: true } | { ok: false; reason: string } {
+  if (id === Block.Water) return { ok: false, reason: 'WATER CANNOT BE MINED' };
   const spec = miningSpec(id);
   if (tier >= spec.tier) return { ok: true };
   if (tier === 0) return { ok: false, reason: 'YOU NEED A TOOL FOR THAT' };
