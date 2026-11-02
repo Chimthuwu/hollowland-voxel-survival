@@ -5,10 +5,10 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { Block, biomeAt, type Biome, World } from './world';
 import { Enemies } from './entities';
 import { AudioEngine } from './audio';
-import { Inventory, UI, headBlockFor } from './ui';
+import { Inventory, UI, headBlockFor, itemLabel } from './ui';
 import { Player } from './player';
 import { Avatar } from './avatar';
-import { nearbyLight } from './lighting';
+import { dayPhase, daylightLevel, nearbyLight, timeOfDayLabel } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
 import { canBreak, effectiveTier, meleeDamage } from './tools';
 import { Pickups } from './pickups';
@@ -40,6 +40,24 @@ const ambient = new THREE.HemisphereLight(0xc3bde8, 0x2a2430, 1.15); scene.add(a
 const sun = new THREE.DirectionalLight(0xd9cdbd, 1.3); sun.position.set(15,35,10); scene.add(sun);
 const flash = new THREE.PointLight(0xdcecff,0,45); scene.add(flash);
 const lantern = new THREE.PointLight(0xffb86b,0,12); scene.add(lantern);
+// Psychosis hallucination: a plain dark silhouette the fog can half-hide.
+// Invisible until the psychosis hook fires an apparition, then fades in,
+// stands there, and is gone at the end of the pulse.
+const phantom = new THREE.Mesh(new THREE.BoxGeometry(.85, 3.1, .45), new THREE.MeshBasicMaterial({ color: 0x07030c, transparent: true, opacity: 0 }));
+phantom.visible = false; scene.add(phantom);
+let phantomTimer = 0;
+function startPhantom(): void {
+  camera.getWorldDirection(aimDirection);
+  const flat = Math.hypot(aimDirection.x, aimDirection.z);
+  if (flat < 1e-4) return;
+  const x = player.position.x + aimDirection.x / flat * 9;
+  const z = player.position.z + aimDirection.z / flat * 9;
+  const y = world.surface(Math.floor(x), Math.floor(z)) + 2.55;
+  phantom.position.set(x, y, z);
+  phantom.rotation.y = Math.atan2(player.position.x - x, player.position.z - z);
+  phantomTimer = 2;
+  phantom.visible = true;
+}
 const world = new World(scene);
 const enemies = new Enemies(scene,world);
 const critters = new Critters(scene,world);
@@ -143,7 +161,7 @@ renderer.domElement.addEventListener('mousedown',e=>{
     }
     if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,meleeDamage(effectiveTier(inventory.toolTier,inventory.beam),inventory.weapon?24:12),(pos,kind)=>{
       // A dead mob drops a raw morsel. Heavier kinds drop more.
-      const count=kind==='crawler'||kind==='stalker'?2:1;
+      const count=kind==='cresthorn'?4:kind==='crawler'||kind==='stalker'||kind==='thrasher'?2:1;
       for(let i=0;i<count;i++) loot.spawn(Block.Morsel,pos.clone().setY(pos.y+.4),1);
     })){audio.event('hit');return;}
     if(hit){
@@ -197,8 +215,15 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
     if(dead){deathTimer-=dt;if(deathTimer<=0)respawn();}
     const p=player.position;
     activeBiome=biomeAt(p.x,p.y,p.z);audio.biome(activeBiome);audio.update(dt);
-    const targetColor=new THREE.Color(colors[activeBiome]);(scene.background as THREE.Color).lerp(targetColor,Math.min(1,dt*1.5));fog.color.lerp(targetColor,Math.min(1,dt*1.5));fog.density=THREE.MathUtils.lerp(fog.density,activeBiome==='catacombs'?.08:activeBiome==='storm'?.048:.027,Math.min(1,dt));
-    ambient.intensity=activeBiome==='catacombs'?.20:activeBiome==='veins'?.30:.98;sun.intensity=activeBiome==='catacombs'?.08:activeBiome==='storm'?.25:1.0;
+    // --- Day-night cycle ---
+    // One world-clock phase drives sky/fog colour, ambient light and the sun's
+    // arc. Underground biomes keep their own permanent darkness, and the night
+    // floor keeps the surface readable instead of pitch black.
+    const dayPhase_ = dayPhase(time), dayLevel = daylightLevel(dayPhase_);
+    const underground = activeBiome==='catacombs'||activeBiome==='veins';
+    const targetColor=new THREE.Color(colors[activeBiome]).multiplyScalar(underground?1:.4+.6*dayLevel);(scene.background as THREE.Color).lerp(targetColor,Math.min(1,dt*1.5));fog.color.lerp(targetColor,Math.min(1,dt*1.5));fog.density=THREE.MathUtils.lerp(fog.density,activeBiome==='catacombs'?.08:activeBiome==='storm'?.048:.027,Math.min(1,dt));
+    ambient.intensity=(activeBiome==='catacombs'?.20:activeBiome==='veins'?.30:.98)*(underground?1:.55+.45*dayLevel);sun.intensity=(activeBiome==='catacombs'?.08:activeBiome==='storm'?.25:1.0)*(underground?1:.45+.55*dayLevel);
+    const sunAngle=(dayPhase_-.25)*Math.PI*2;sun.position.set(Math.cos(sunAngle)*28,Math.max(9,Math.sin(sunAngle)*30+12),16);
     if(activeBiome==='glitch'){gravityTimer-=dt;if(gravityTimer<=0){gravityTimer=3;gravity=[.5,1,1.5][Math.floor(Math.random()*3)];audio.event('shift');}}else{gravity=1;gravityTimer=0;}
     const exposed=p.y>world.surface(Math.floor(p.x),Math.floor(p.z));
     if(activeBiome==='storm'&&exposed){lightningTimer-=dt;if(lightningTimer<=0){strike();lightningTimer=5+Math.random()*5;}} else lightningTimer=6;
@@ -212,11 +237,12 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       if(hook.damage>0)damage(hook.damage,'hazard');
       if(hook.sound)audio.event(hook.sound);
       if(hook.message)hookMessage=hook.message;
+      if(hook.hallucination>0)startPhantom();
       const stepGravity = (powerups.hasGravity ? gravity * REDUCED_GRAVITY : gravity) * hook.gravityScale;
       const impact=player.step(dt,{forward:forward*sign,strafe:strafe*sign,jump:jumpQueued,yaw},(x,y,z)=>world.get(x,y,z)!==Block.Air,stepGravity,activeBiome==='storm'&&exposed?2:0,(sprint?1.45:1)*(under===Block.Mud?.6:1)*hook.speedScale);jumpQueued=false;lastImpact=impact;
       if(impact>11)damage((impact-11)*3,'fall');
       if(under===Block.Flesh && (forward||strafe)){footsteps-=dt;if(footsteps<=0){audio.event('squelch');footsteps=.55;}}
-      enemies.update(dt,p,activeBiome,(n)=>damage(n,'enemy'));
+      enemies.update(dt,p,activeBiome,(n)=>damage(n,'enemy'),dayPhase_,lit);
       critters.update(dt,p,activeBiome);
       const pickups=powerups.update(world,p.x,p.y,p.z);for(const k of pickups)audio.event(k==='gravity'?'shift':'break');
       for(const id of loot.update(dt,p)){ if(inventory.add(id))audio.event('break'); }
@@ -245,8 +271,15 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
     if(beam.isActive()){camera.getWorldDirection(aimDirection);beam.update(dt,eye,aimDirection,6,(id,x,y,z)=>{inventory.add(id);audio.event('break');timber.notify(x,y,z,player.position);if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier);}
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
-    post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'&&!settings.reduceIntensity?1:0;post.uniforms.uPsy.value=activeBiome==='psychosis'&&!settings.reduceIntensity?1:0;
-    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const toolStr=inventory.toolTier>0?`TOOL T${inventory.toolTier}${inventory.toolDurability>0?' ('+inventory.toolDurability+')':''} · `:'';const hookLabel=HOOKS[activeBiome].label;const info=powerStr+toolStr+(hookMessage||hookLabel);
+    post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'&&!settings.reduceIntensity?1:0;post.uniforms.uPsy.value=Math.min(1.5,(activeBiome==='psychosis'&&!settings.reduceIntensity?1:0)+(phantomTimer>0?.45:0));
+    if(phantomTimer>0){
+      phantomTimer-=dt;
+      // Fade in over the first third, hold, and dissolve at the end.
+      const t=Math.max(0,phantomTimer/2);const rise=t<.7?(.7-t)/.7:1;
+      const mat=phantom.material as THREE.MeshBasicMaterial;mat.opacity=Math.min(.55,.62*rise*Math.min(1,t*2.5+ .35));
+      if(phantomTimer<=0)phantom.visible=false;
+    }
+    effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const toolStr=inventory.toolTier>0?`TOOL T${inventory.toolTier}${inventory.toolDurability>0?' ('+inventory.toolDurability+')':''} · `:'';const sel=inventory.selectedItem();const selStr=sel?` · ${itemLabel(sel.id)}`:'';const hookLabel=HOOKS[activeBiome].label;const info=powerStr+toolStr+timeOfDayLabel(dayPhase_)+' · '+(hookMessage||hookLabel)+selStr;
     ui.update(health,sanity,stamina,activeBiome,info);
     overlay.recordFrame(dt);
     overlay.render(time,{x:p.x,y:p.y,z:p.z,vy:player.verticalVelocity,biome:activeBiome,health,sanity,stamina,gravity,impact:lastImpact});

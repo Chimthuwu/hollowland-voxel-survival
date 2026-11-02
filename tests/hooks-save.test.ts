@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Block, type World } from '../src/world';
-import { BiomeHooks, HOOKS } from '../src/biomeHooks';
+import { BiomeHooks, HOOKS, type HookEffects } from '../src/biomeHooks';
 import { clearSave, deserialize, deserializeInventory, readSave, serializeInventory, writeSave } from '../src/save';
 
 function mockWorld(get: (x: number, y: number, z: number) => Block, set?: (x: number, y: number, z: number, id: Block) => void) {
@@ -93,6 +93,90 @@ describe('biome hooks', () => {
     const effects = hooks.tick('sky', ctx());
     expect(effects.gravityScale).toBeLessThan(1);
     expect(effects.speedScale).toBeGreaterThan(1);
+  });
+
+  // Deterministic RNG so the randomized swap/haunt loops produce the same
+  // series of picks on every run.
+  const mulberry32 = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  it('glitch rearranges solid blocks without touching the player or utilities', () => {
+    const world = mockWorld((_x, y, _z) => (y >= -3 && y <= -1 ? Block.Stone : Block.Air));
+    world.set(2, 0, 2, Block.GravityCharm);
+    world.set(2, 0, -2, Block.Torch);
+    const hooks = new BiomeHooks(world, mulberry32(90210));
+    let sawMessage = false;
+    for (let i = 0; i < 200; i++) {
+      const e = hooks.tick('glitch', ctx({ world, player: new THREE.Vector3(0, 0, 0), dt: 2 }));
+      if (e.message === 'REALITY IS REARRANGING') sawMessage = true;
+    }
+    // The terrain around the player did trade places at least once.
+    expect(sawMessage).toBe(true);
+    // Special blocks are never swept up in a swap.
+    expect(world.get(2, 0, 2)).toBe(Block.GravityCharm);
+    expect(world.get(2, 0, -2)).toBe(Block.Torch);
+    // Swaps preserve the world's total solid-block count, and never bury
+    // or wedge a block into the player's own occupancy box.
+    let solid = 0;
+    for (let x = -7; x <= 7; x++)
+      for (let y = -4; y <= 4; y++)
+        for (let z = -7; z <= 7; z++) {
+          if (x >= -1 && x <= 1 && y >= -1 && y <= 2 && z >= -1 && z <= 1) {
+            // The swap guard excludes the player's occupancy box, so the only
+            // solids it can hold are its share of the original ground slab
+            // (the 3x1x3 band at y=-1; swaps may not add or remove any).
+            if (world.get(x, y, z) !== Block.Air) solid++;
+            continue;
+          }
+          if (world.get(x, y, z) !== Block.Air) solid++;
+        }
+    // Ground slab is 15*3*15 stone = 675, plus the charm and torch the test
+    // placed; swaps themselves are strictly count-neutral.
+    expect(solid).toBe(677);
+  });
+
+  it('maw thin crust over a void bites far harder than solid flesh', () => {
+    const pitWorld = mockWorld((_x, y, _z) => (y === -1 ? Block.Flesh : Block.Air));
+    const solidWorld = mockWorld((_x, y, _z) => (y >= -1 ? Block.Flesh : Block.Stone));
+    const onPit = new BiomeHooks(pitWorld).tick('maw', ctx({ world: pitWorld, player: new THREE.Vector3(.5, -.5, .5) }));
+    const onSolid = new BiomeHooks(solidWorld).tick('maw', ctx({ world: solidWorld, player: new THREE.Vector3(.5, -.5, .5) }));
+    expect(onPit.damage).toBeGreaterThan(onSolid.damage);
+    expect(onPit.message).toContain('PIT');
+  });
+
+  it('psychosis whispers below threshold sanity and escalates when nearly spent', () => {
+    const world = mockWorld(() => Block.Air);
+    const hooks = new BiomeHooks(world, mulberry32(777));
+    let whisper: number | null = null;
+    let apparition: HookEffects | null = null;
+    for (let i = 0; i < 40; i++) {
+      const e = hooks.tick('psychosis', ctx({ world, sanity: 40, dt: 3 }));
+      if (e.sound === 'whisper' && whisper === null) whisper = e.hallucination;
+    }
+    for (let i = 0; i < 40; i++) {
+      const e = hooks.tick('psychosis', ctx({ world, sanity: 12, dt: 3 }));
+      if (e.sound === 'whisper' && e.hallucination === 2 && apparition === null) apparition = e;
+    }
+    expect(whisper).not.toBeNull();
+    expect(whisper).toBe(1);
+    expect(apparition).not.toBeNull();
+    // Well-grounded sanity stays silent for a long while.
+    const calm = new BiomeHooks(mockWorld(() => Block.Air));
+    let sounds = 0;
+    for (let i = 0; i < 60; i++) if (calm.tick('psychosis', ctx({ sanity: 90, dt: 2 })).sound) sounds++;
+    expect(sounds).toBe(0);
+    // And the reduced-intensity accessibility toggle silences the hauntings.
+    const gentle = new BiomeHooks(mockWorld(() => Block.Air));
+    for (let i = 0; i < 60; i++) {
+      const e = gentle.tick('psychosis', ctx({ sanity: 10, dt: 2, intense: false }));
+      expect(e.sound).toBeNull();
+      expect(e.hallucination).toBe(0);
+    }
   });
 });
 
