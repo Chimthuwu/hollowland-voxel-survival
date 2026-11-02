@@ -313,22 +313,25 @@ export class World {
     const body = waterBodyAt(x, z);
     if (body !== 0) {
       // Water bed: one block under the surface for rivers (a wadeable
-      // stream), while lakes deepen toward the middle in single-block steps
-      // so a swimmer can always hop out band by band — no blocks required.
+      // stream), while lakes sink one block deeper in their middle — a
+      // two-step floor keeps every shore a single jump out, no blocks needed.
       let depth = 0;
       if (body === 2) {
         const ln = noise(x / 90 + 515, z / 90 + 515);
-        depth = ln < LAKE_BAND / 3 ? 2 : ln < LAKE_BAND * 2 / 3 ? 1 : 0;
+        depth = ln < LAKE_BAND / 2 ? 1 : 0;
       }
       h = Math.min(h, WATER_LEVEL - 1 - depth);
-    } else if (waterBodyAt(x + 1, z) || waterBodyAt(x - 1, z)
-      || waterBodyAt(x, z + 1) || waterBodyAt(x, z - 1)
-      || waterBodyAt(x + 1, z + 1) || waterBodyAt(x - 1, z + 1)
-      || waterBodyAt(x + 1, z - 1) || waterBodyAt(x - 1, z - 1)) {
-      // Shore ring: capped at water level so the bank sits exactly one block
-      // above the water's surface — every river and lake shore is a single
-      // jump out, even where a mountain foot meets the water.
-      h = Math.min(h, WATER_LEVEL);
+    } else {
+      // Shore ring: never rises more than one block above the shallowest
+      // neighbouring water bed, so the step from water to land is ≤1 even
+      // where a mountain foot or desert edge meets a deep pool.
+      let wetBed: number | null = null;
+      for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
+        if ((ox === 0 && oz === 0) || waterBodyAt(x + ox, z + oz) === 0) continue;
+        const b = this.surface(x + ox, z + oz);
+        if (wetBed === null || b < wetBed) wetBed = b;
+      }
+      if (wetBed !== null) h = Math.min(h, wetBed + 1);
     }
     return Math.floor(h);
   }

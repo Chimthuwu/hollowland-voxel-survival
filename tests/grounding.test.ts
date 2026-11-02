@@ -75,9 +75,13 @@ describe('trees are rooted, collidable voxel woodland', () => {
       (x, y) => (y > 64 ? 'sky' : y < 0 ? 'catacombs' : x < 96 ? 'overcast' : 'storm'),
       () => false);
     expect(trees.length).toBeGreaterThan(0);
-    const t = trees[0];
+    // The raw collector has no terrain policy; the world only renders trees
+    // on open ground (not water/desert), so pick one that actually exists.
+    const TRUNKS = [Block.Wood, Block.Glitch, Block.Bone, Block.Flesh];
+    const t = trees.find(tr => TRUNKS.includes(world.get(tr.tx, tr.baseY, tr.tz)))!;
+    expect(t, 'no tree in range renders as a real trunk').toBeDefined();
     const trunk = world.get(t.tx, t.baseY, t.tz);
-    expect([Block.Wood, Block.Glitch, Block.Bone, Block.Flesh]).toContain(trunk);
+    expect(TRUNKS).toContain(trunk);
     // Canopy leaves exist somewhere in the tree's bounding volume — and as
     // solid blocks they are collidable by construction (world.get != Air).
     let leafY: number | null = null, topY: number | null = null;
