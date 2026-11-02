@@ -18,6 +18,8 @@ interface TreeArchetype {
   trunkColor: [number, number, number];
   canopyColor: [number, number, number];
   accentColor: [number, number, number];
+  /** Small fruits hung from the canopy edge (overcast sky-blue fruit). */
+  fruitColor?: [number, number, number];
   /** Per-cube color variation amount (0..1). */
   jitter: number;
   /** Shader effect id (0=none, 1=flesh, 2=glitch). */
@@ -25,7 +27,8 @@ interface TreeArchetype {
 }
 
 const ARCHETYPES: Record<Biome, TreeArchetype | null> = {
-  overcast:  { style: 'conifer',   trunkHeight: 6, trunkWidth: [.6, .32], lean: .06, trunkColor: [.21, .19, .17], canopyColor: [.05, .105, .085], accentColor: [.10, .16, .12], jitter: .03,  effect: 0 },
+  // Default biome: gray trunks, lavender leaves, sky-blue fruit — overcast but not monochrome.
+  overcast:  { style: 'conifer',   trunkHeight: 6, trunkWidth: [.6, .32], lean: .06, trunkColor: [.40, .40, .42], canopyColor: [.60, .50, .78], accentColor: [.74, .66, .90], fruitColor: [.42, .74, .96], jitter: .05,  effect: 0 },
   storm:     { style: 'windswept', trunkHeight: 4, trunkWidth: [.55, .38], lean: .45, trunkColor: [.17, .14, .115], canopyColor: [.10, .125, .11], accentColor: [.14, .155, .14], jitter: .035, effect: 0 },
   glitch:    { style: 'corrupted', trunkHeight: 3, trunkWidth: [.62, .45], lean: 0,   trunkColor: [.28, .20, .26], canopyColor: [.50, .22, .55], accentColor: [.35, .90, .82], jitter: .05,  effect: 2 },
   psychosis: { style: 'weeping',   trunkHeight: 5, trunkWidth: [.5, .3],   lean: 0,   trunkColor: [.71, .66, .58], canopyColor: [.55, .14, .19], accentColor: [.72, .28, .25], jitter: .04,  effect: 1 },
@@ -122,6 +125,17 @@ function emitConifer(out: FoliageBuffers, x: number, baseY: number, z: number, a
   // Spire tip above the top layer.
   const tip = jitterC(a.accentColor, a.jitter, seedX, seedZ, 99);
   addBox(out, x + .5, baseY + h + .2, z + .5, .35, 1.6, .35, tip[0], tip[1], tip[2], a.effect);
+  // Small fruits hang beneath the lower canopy edge (not every tree is laden).
+  if (a.fruitColor) {
+    for (let f = 0; f < 4; f++) {
+      if (hash(seedX * 4.7 + f * 13, seedZ * 6.1 + f * 7) < .4) continue;
+      const ang = hash(seedX + f * 3, seedZ * 5 + f * 11) * Math.PI * 2;
+      const rr = 1.1 + hash(seedX * 2 + f, seedZ * 3 + f * 7) * 1.2;
+      const fx = Math.round(Math.cos(ang) * rr), fz = Math.round(Math.sin(ang) * rr);
+      const c = jitterC(a.fruitColor, a.jitter, seedX + f, seedZ - f, 7);
+      addBox(out, x + .5 + fx, baseY + start + .55, z + .5 + fz, .3, .3, .3, c[0], c[1], c[2], 0);
+    }
+  }
 }
 
 /** Storm: windswept stub — accelerating lean, one flat canopy stretched downwind. */

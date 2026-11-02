@@ -19,7 +19,7 @@ import { clearSave, deserializeInventory, readSave, serializeInventory, writeSav
 import './style.css';
 
 const clamp = THREE.MathUtils.clamp;
-const colors: Record<Biome, number> = {overcast:0x343e3b, storm:0x11151b, glitch:0x34203f, psychosis:0x332b38, maw:0x401014, catacombs:0x0b0b10, veins:0x29090f, sky:0x31333d};
+const colors: Record<Biome, number> = {overcast:0x474058, storm:0x11151b, glitch:0x34203f, psychosis:0x332b38, maw:0x401014, catacombs:0x0b0b10, veins:0x29090f, sky:0x31333d};
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(colors.overcast);
 scene.fog = new THREE.FogExp2(colors.overcast, 0.027);
@@ -30,8 +30,8 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.querySelector('#app')!.appendChild(renderer.domElement);
 renderer.domElement.addEventListener('webglcontextlost', event => { event.preventDefault(); const el=document.createElement('div'); el.style.cssText='position:fixed;inset:0;z-index:10000;background:#111;color:white;padding:3rem;font:18px sans-serif'; el.textContent='The graphics context was lost. Close other graphics-heavy tabs and reload the game.'; document.body.appendChild(el); });
 const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.07, 180);
-const ambient = new THREE.HemisphereLight(0xb8c4be, 0x20201e, 1.15); scene.add(ambient);
-const sun = new THREE.DirectionalLight(0xc2c5bd, 1.3); sun.position.set(15,35,10); scene.add(sun);
+const ambient = new THREE.HemisphereLight(0xc3bde8, 0x2a2430, 1.15); scene.add(ambient);
+const sun = new THREE.DirectionalLight(0xd9cdbd, 1.3); sun.position.set(15,35,10); scene.add(sun);
 const flash = new THREE.PointLight(0xdcecff,0,45); scene.add(flash);
 const lantern = new THREE.PointLight(0xffb86b,0,12); scene.add(lantern);
 const world = new World(scene);

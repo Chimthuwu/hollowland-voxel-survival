@@ -62,7 +62,7 @@ export const ENTRANCES: ReadonlyArray<readonly [number, number, number, number]>
 ];
 
 const colors: Record<number, number> = {
-  [Block.Dirt]: 0x555047, [Block.Stone]: 0x555761, [Block.Wood]: 0x4a3935,
+  [Block.Dirt]: 0x8a5a4e, [Block.Stone]: 0x555761, [Block.Wood]: 0x4a3935,
   [Block.Mud]: 0x373a3c, [Block.Glitch]: 0x843c8b, [Block.Flesh]: 0x9f4e59,
   [Block.Bone]: 0xbeb09b, [Block.Torch]: 0xf7a44b, [Block.Scaffold]: 0x6e6355,
   [Block.Totem]: 0x7b423e, [Block.Scorched]: 0x28252a,
@@ -223,13 +223,16 @@ export class World {
       const id = this.get(x, y, z);
       if (id === Block.Air) continue;
       color.setHex(colors[id] ?? 0xff00ff);
+      // Per-voxel brightness variation gives the ground a dithered pixel-art
+      // texture instead of one flat color per block type.
+      const vary = .92 + hash3(x, y, z) * .16;
       for (const face of faces) {
         if (this.get(x + face.n[0], y + face.n[1], z + face.n[2]) !== Block.Air) continue;
         const base = positions.length / 3;
         for (const v of face.v) {
           positions.push(x + v[0], y + v[1], z + v[2]);
           normals.push(...face.n);
-          tint.push(color.r * face.shade, color.g * face.shade, color.b * face.shade);
+          tint.push(color.r * face.shade * vary, color.g * face.shade * vary, color.b * face.shade * vary);
           effects.push(id === Block.Flesh ? 1 : id === Block.Glitch ? 2 : 0);
         }
         indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
