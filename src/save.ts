@@ -28,6 +28,11 @@ export interface SaveData {
     toolTier: number;
     /** Uses left on the current tool. */
     toolDurability: number;
+    /** Creature-gear flags, optional so older saves load unchanged. */
+    armored?: boolean;
+    hideGuarded?: boolean;
+    /** Melee bonus from the claw shiv, 0..12. */
+    edgeBonus?: number;
   };
 }
 

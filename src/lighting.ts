@@ -1,6 +1,29 @@
 import type { Vector3 } from 'three';
 import { Block, type Biome, type World } from './world';
 
+interface LightSource { x: number; y: number; z: number }
+
+/**
+ * Finds the nearest placed light (torch or totem) to a point, returning the
+ * centre of its cell, or null when none is near. Creature AI uses this to
+ * make certain wildlife drift toward placed lights — a drawn moth, furious
+ * wasps — while light-fearing kinds recoil instead.
+ */
+export function lightSourceNear(world: Pick<World, 'get'>, p: { x: number; y: number; z: number }, radius = 9): LightSource | null {
+  const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
+  let best: LightSource | null = null, bestD = Infinity;
+  for (let x = fx - radius; x <= fx + radius; x++)
+    for (let y = Math.max(fy - 3, fy - radius); y <= fy + 3; y++)
+      for (let z = fz - radius; z <= fz + radius; z++) {
+        const block = world.get(x, y, z);
+        if (block !== Block.Torch && block !== Block.Totem) continue;
+        const cx = x + .5, cy = y + .5, cz = z + .5;
+        const d = (cx - p.x) ** 2 + (cy - p.y) ** 2 + (cz - p.z) ** 2;
+        if (d < bestD) { bestD = d; best = { x: cx, y: cy, z: cz }; }
+      }
+  return best;
+}
+
 export function nearbyLight(world: Pick<World, 'get'>, p: Vector3, biome: Biome): { lit: boolean; restore: boolean } {
   let lit = false, restore = false;
   for (let x = Math.floor(p.x)-4; x <= Math.floor(p.x)+4; x++)
@@ -50,6 +73,13 @@ export function timeOfDayLabel(phase: number): 'DAWN' | 'DAY' | 'DUSK' | 'NIGHT'
 
 /** Optional extra occluders above (e.g. leaf voxels owned by the foliage system). */
 export type CanopyQuery = (x: number, y: number, z: number) => boolean;
+
+/**
+ * Exposure thresholds shared by creature ecology. Deep shade below
+ * `stalkerHide` is where light-fearing creatures can exist in daylight; above
+ * `stalkerHunt` the world reads as openly bright to them.
+ */
+export const MOB_LIGHT = { stalkerHide: .38, stalkerHunt: .72 } as const;
 
 /**
  * True when a position is genuinely shaded: underground, under a solid roof,

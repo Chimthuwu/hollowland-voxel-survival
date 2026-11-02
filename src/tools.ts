@@ -84,9 +84,9 @@ export function canBreak(id: Block, tier: number): { ok: true } | { ok: false; r
 }
 
 /** Melee damage for a swung tool. Bare hands are the floor. */
-export function meleeDamage(tier: number, base: number): number {
+export function meleeDamage(tier: number, base: number, bonus = 0): number {
   const scale = [1, 1.35, 1.8, 2.4][Math.min(3, Math.max(0, tier))];
-  return Math.round(base * scale);
+  return Math.round(base * scale) + bonus;
 }
 
 /** Uses a tier-N tool lasts before it needs re-knapping. */

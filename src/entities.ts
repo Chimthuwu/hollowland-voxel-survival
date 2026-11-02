@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { Block, type Biome, type World } from './world';
-import { exposureAt, MOB_LIGHT } from './lighting';
+import { exposureAt, lightSourceNear, MOB_LIGHT } from './lighting';
 
-type Kind = 'stalker' | 'node' | 'crawler' | 'hallucination' | 'skitter' | 'thrasher' | 'cresthorn';
+type Kind = 'stalker' | 'node' | 'crawler' | 'hallucination' | 'skitter' | 'thrasher' | 'cresthorn' | 'hopper' | 'saurolisk';
 export type { Kind };
 
 /** Seconds a dying mob spends shrinking and sinking before it is removed. */
@@ -50,6 +50,10 @@ type Mob = {
   /** Stalker head twitch: abrupt, out-of-sync, wrong. */
   twitchT: number;
   tiltZ: number;
+  /** Light attraction: seconds until the next scan for a placed light. */
+  lightT: number;
+  /** Cached nearest torch/totem cell centre, or null. */
+  lightPt: THREE.Vector3 | null;
 };
 
 const stats: Record<Kind, { hp: number; speed: number; damage: number; size: number }> = {
@@ -64,6 +68,10 @@ const stats: Record<Kind, { hp: number; speed: number; damage: number; size: num
   thrasher:      { hp: 66,  speed: 2.1, damage: 18, size: 1.15 },
   // Territorial dinosaur: rare, huge, gives a warning display before charging.
   cresthorn:     { hp: 150, speed: 1.7, damage: 24, size: 2.6 },
+  // Spring-mad grazer insect: mid-small, closes ground in anxious bounds.
+  hopper:        { hp: 14,  speed: 2.2, damage: 8,  size: .8 },
+  // Pack raptor: the second dinosaur. Fast telegraphed charger, short wind-up.
+  saurolisk:     { hp: 95,  speed: 4.4, damage: 16, size: 1.55 },
 };
 
 function kindFor(b: Biome): Kind {
@@ -85,6 +93,10 @@ function buildMaterial(kind: Kind): THREE.MeshStandardMaterial {
     case 'thrasher':      return new THREE.MeshStandardMaterial({ color: 0x5c2330, roughness: .6,  emissive: 0x1c060a, emissiveIntensity: .35 });
     // Cresthorn: dusty sage hide — a territorial grazer, not a shadow creature.
     case 'cresthorn':     return new THREE.MeshStandardMaterial({ color: 0x6d7258, roughness: .95 });
+    // Hopper: meadow-green chitin, a nervous jumper.
+    case 'hopper':        return new THREE.MeshStandardMaterial({ color: 0x55683f, roughness: .7, emissive: 0x14260c, emissiveIntensity: .3 });
+    // Saurolisk: dark teal raptor hide, lean and quick.
+    case 'saurolisk':     return new THREE.MeshStandardMaterial({ color: 0x37524a, roughness: .85, emissive: 0x0a1512, emissiveIntensity: .25 });
     case 'stalker':
     default:              return new THREE.MeshStandardMaterial({ color: 0x151316, roughness: .9,  emissive: 0x080406, emissiveIntensity: .15 });
   }
@@ -341,9 +353,81 @@ function buildMesh(kind: Kind, material: THREE.Material): { root: THREE.Group; p
     case 'skitter':       return buildSkitter(material);
     case 'thrasher':      return buildThrasher(material);
     case 'cresthorn':     return buildCresthorn(material);
+    case 'hopper':        return buildHopper(material);
+    case 'saurolisk':     return buildSaurolisk(material);
     case 'stalker':
     default:              return buildStalker(material);
   }
+}
+
+/** Hopper: nervous spring-legged grazer insect — tilted body, coiled hind legs. */
+function buildHopper(material: THREE.Material): { root: THREE.Group; parts: MobParts } {
+  const root = new THREE.Group();
+  const body = boxAt(root, material, .5, .32, .8, 0, .4, -.05);
+  body.rotation.x = .3;
+  boxAt(root, material, .3, .22, .26, 0, .52, -.48);      // raised head capsule
+  addEyes(root, .08, .58, -.6, .05, AMBER_MATERIAL);
+  for (const sx of [-1, 1]) {
+    const antenna = boxAt(root, material, .02, .02, .32, sx * .09, .62, -.66);
+    antenna.rotation.x = -.8;
+    antenna.userData.base = 0;
+  }
+  const limbs: THREE.Object3D[] = [];
+  for (const sx of [-1, 1]) {
+    // Sprung hind leg: coxa kicked back, shin folded under.
+    const hip = new THREE.Group();
+    hip.position.set(sx * .27, .44, .24);
+    hip.userData.base = 0;
+    const femur = boxAt(hip, material, .08, .34, .09, sx * .1, -.08, .08);
+    femur.rotation.x = -.85;
+    boxAt(hip, material, .05, .3, .05, sx * .16, -.3, .18).rotation.x = .55;
+    root.add(hip);
+    limbs.push(hip);
+    // Small front leg pairs.
+    for (let i = 0; i < 2; i++) {
+      const front = new THREE.Group();
+      front.position.set(sx * .22, .3, -.28 + i * .2);
+      front.userData.base = 0;
+      boxAt(front, material, .04, .05, .05, sx * .12, -.02, 0).rotation.z = sx * -.8;
+      boxAt(front, material, .03, .18, .03, sx * .2, -.12, 0).rotation.z = sx * .35;
+      root.add(front);
+      limbs.push(front);
+    }
+  }
+  return { root, parts: { limbs, jaws: [], sway: root, orbiters: [] } };
+}
+
+/** Saurolisk: lean second dinosaur — raptor hide, whip tail, sickle-claw legs. */
+function buildSaurolisk(material: THREE.Material): { root: THREE.Group; parts: MobParts } {
+  const root = new THREE.Group();
+  const sway = new THREE.Group();
+  sway.position.y = 1;
+  root.add(sway);
+  boxAt(sway, material, .55, .55, 1.5, 0, .3, .1);        // lean torso
+  boxAt(sway, material, .42, .42, .8, 0, .55, -.75);      // raised chest
+  boxAt(sway, material, .3, .3, 1.1, 0, .3, 1.15);        // tail base
+  boxAt(sway, material, .2, .2, .6, 0, .24, 1.95);        // tail whip
+  // Neck and snapping head.
+  const neck = new THREE.Group();
+  neck.position.set(0, .78, -.72);
+  neck.rotation.x = -.15;
+  neck.userData.baseX = -.15;
+  sway.add(neck);
+  boxAt(neck, material, .22, .5, .24, 0, .2, 0);
+  boxAt(neck, material, .2, .2, .5, 0, .42, -.3);         // skull
+  boxAt(neck, material, .18, .07, .44, 0, .31, -.44);     // jawline
+  addEyes(neck, .06, .5, -.5, .05, AMBER_MATERIAL);
+  // Two bounding sickle-claw legs plus quick little arms.
+  const limbs: THREE.Object3D[] = [];
+  for (const sx of [-1, 1]) {
+    const leg = limbAt(root, material, sx * .3, .9, .9, .16, sx * .1);
+    boxAt(leg, material, .12, .55, .12, 0, -.84, 0);       // shin
+    const foot = boxAt(leg, material, .16, .06, .36, 0, -1.32, -.06);
+    void foot;
+    limbs.push(leg);
+  }
+  for (const sx of [-1, 1]) limbs.push(limbAt(sway, material, sx * .3, 1.2, .4, .08, sx * .55));
+  return { root, parts: { limbs, jaws: [], sway, orbiters: [] } };
 }
 
 export class Enemies {
@@ -365,6 +449,8 @@ export class Enemies {
       skitter:       buildMaterial('skitter'),
       thrasher:      buildMaterial('thrasher'),
       cresthorn:     buildMaterial('cresthorn'),
+      hopper:        buildMaterial('hopper'),
+      saurolisk:     buildMaterial('saurolisk'),
     };
     // One white-hot material per kind. Mobs swap to it on a hit and back after,
     // so there is no per-spawn material allocation.
@@ -379,6 +465,8 @@ export class Enemies {
       skitter: flash(false),
       thrasher: flash(false),
       cresthorn: flash(false),
+      hopper: flash(false),
+      saurolisk: flash(false),
     };
   }
 
@@ -413,6 +501,8 @@ export class Enemies {
       charge: { state: 'roam', timer: 0, dirX: 0, dirZ: 1 },
       twitchT: Math.random() * 2,
       tiltZ: 0,
+      lightT: Math.random() * .6,
+      lightPt: null,
     });
   }
 
@@ -430,13 +520,17 @@ export class Enemies {
       return;
     }
     const roll = Math.random();
-    if (roll < .4 && count('skitter') < 9) {
+    if (roll < .3 && count('skitter') < 9) {
       const pack = 2 + Math.floor(Math.random() * 2);
       for (let i = 0; i < pack; i++)
         this.spawnKind('skitter', new THREE.Vector3(x + (Math.random() - .5) * 3, groundY, z + (Math.random() - .5) * 3));
-    } else if (roll < .68 && count('thrasher') < 2) {
+    } else if (roll < .48 && count('hopper') < 5) {
+      this.spawnKind('hopper', at);
+    } else if (roll < .62 && count('thrasher') < 2) {
       this.spawnKind('thrasher', at);
-    } else if (roll < .74 && count('cresthorn') < 1) {
+    } else if (roll < .7 && count('saurolisk') < 2) {
+      this.spawnKind('saurolisk', at);
+    } else if (roll < .76 && count('cresthorn') < 1) {
       this.spawnKind('cresthorn', at);
     }
   }
@@ -529,26 +623,31 @@ export class Enemies {
           step = mob.speed * 1.2 * dt;
           faceAway = true;
         }
-      } else if (mob.kind === 'thrasher' || mob.kind === 'cresthorn') {
+      } else if (mob.kind === 'thrasher' || mob.kind === 'cresthorn' || mob.kind === 'saurolisk') {
         // Telegraphed charger: stalk → wind-up pause → lunge → recover.
+        // The saurolisk is the fast pack-hunter variant: shorter wind-up, a
+        // brisker lunge and less time standing still after committing.
+        const cfg = mob.kind === 'cresthorn' ? { wary: 1.15, lunge: .55, speed: 8, recover: 1.7 }
+          : mob.kind === 'saurolisk' ? { wary: .5, lunge: .5, speed: 11, recover: 1.1 }
+          : { wary: .7, lunge: .42, speed: 9.5, recover: 1.7 };
         const c = mob.charge;
         chase = false;
         if (c.state === 'roam') {
-          if (dist < 10) { c.state = 'wary'; c.timer = mob.kind === 'cresthorn' ? 1.15 : .7; }
+          if (dist < 10) { c.state = 'wary'; c.timer = cfg.wary; }
         } else if (c.state === 'wary') {
           c.timer -= dt;
           if (c.timer <= 0) {
             if (dist < 12) {
               c.state = 'lunge';
-              c.timer = mob.kind === 'cresthorn' ? .55 : .42;
+              c.timer = cfg.lunge;
               c.dirX = dx / (dist + 1e-4); c.dirZ = dz / (dist + 1e-4);
             } else c.state = 'roam';
           }
         } else if (c.state === 'lunge') {
           moveX = c.dirX; moveZ = c.dirZ;
-          step = (mob.kind === 'cresthorn' ? 8 : 9.5) * dt;
+          step = cfg.speed * dt;
           c.timer -= dt;
-          if (c.timer <= 0) { c.state = 'recover'; c.timer = 1.7; }
+          if (c.timer <= 0) { c.state = 'recover'; c.timer = cfg.recover; }
         } else {
           // Backing off after a committed lunge — the window to retaliate.
           c.timer -= dt;
@@ -557,7 +656,35 @@ export class Enemies {
           faceAway = true;
           if (c.timer <= 0) c.state = 'roam';
         }
+      } else if (mob.kind === 'hopper') {
+        // Spring-mad grazer: whenever it is grounded it bounds to close ground.
+        if (mob.vy === 0 && dist > 2.2) mob.vy = 5.6;
       }
+
+      // --- Light attraction --------------------------------------------------
+      // Drawn kinds (skitter, hopper) drift toward a placed light when it is
+      // the nearer magnet than the player — a lure to bait swarms away from
+      // a camp, with the bug pile to fight around it as the price.
+      let faceMove = false; // face the travel direction (attraction drift)
+      if (mob.kind === 'skitter' || mob.kind === 'hopper') {
+        mob.lightT -= dt;
+        if (mob.lightT <= 0) {
+          mob.lightT = .5;
+          const src = lightSourceNear(this.world, p, 9);
+          mob.lightPt = src ? new THREE.Vector3(src.x, src.y, src.z) : null;
+        }
+        const lt = mob.lightPt;
+        if (lt) {
+          const lx = lt.x - p.x, lz = lt.z - p.z;
+          const ld = Math.hypot(lx, lz);
+          if (ld < dist + 2 && ld > 1.6) {
+            chase = false;
+            moveX = lx / (ld + 1e-4); moveZ = lz / (ld + 1e-4);
+            step = mob.speed * dt;
+            faceMove = true;
+          }
+        }
+      } else if (mob.lightPt) mob.lightPt = null;
 
       // --- Movement over terrain ------------------------------------------------
       if (step > 0) {
@@ -572,8 +699,8 @@ export class Enemies {
       }
       // Face travel; wary chargers and lurkers face the player.
       if (step > 0) {
-        const fx = faceAway ? moveX : chase || mob.charge.state !== 'lunge' ? dx / (dist + 1e-4) : moveX;
-        const fz = faceAway ? moveZ : chase || mob.charge.state !== 'lunge' ? dz / (dist + 1e-4) : moveZ;
+        const fx = faceAway || faceMove ? moveX : chase || mob.charge.state !== 'lunge' ? dx / (dist + 1e-4) : moveX;
+        const fz = faceAway || faceMove ? moveZ : chase || mob.charge.state !== 'lunge' ? dz / (dist + 1e-4) : moveZ;
         mob.root.rotation.y = Math.atan2(-fx, -fz);
       }
 
@@ -626,7 +753,7 @@ export class Enemies {
     const dir = direction.clone().normalize();
     let best = -1, near = range;
     for (let i = 0; i < this.mobs.length; i++) {
-      const mob = this.mobs[i], center = mob.root.position.clone().add(new THREE.Vector3(0, mob.kind === 'crawler' ? .5 : mob.kind === 'cresthorn' ? 2.1 : 1, 0));
+      const mob = this.mobs[i], center = mob.root.position.clone().add(new THREE.Vector3(0, mob.kind === 'crawler' ? .5 : mob.kind === 'cresthorn' ? 2.1 : mob.kind === 'saurolisk' ? 1.2 : 1, 0));
       const delta = center.sub(origin), along = delta.dot(dir);
       if (along < 0 || along > near) continue;
       if (delta.addScaledVector(dir, -along).length() > .8) continue;

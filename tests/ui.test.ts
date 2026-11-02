@@ -73,4 +73,48 @@ describe('Inventory', () => {
     expect(inventory.craft('totem')).toBe(false);
     expect(JSON.stringify(inventory.slots)).toBe(before);
   });
+
+  // Creature-gear recipes: drops (chitin, silk, hide, claw) become real gear.
+  describe('creature gear recipes', () => {
+    it('the chitin cuirass armors the player once, atomically', () => {
+      const inventory = new Inventory();
+      inventory.add(Block.Chitin, 3); inventory.add(Block.Silk, 2);
+      expect(inventory.craft('plate')).toBe(true);
+      expect(inventory.armored).toBe(true);
+      expect(inventory.count(Block.Chitin)).toBe(0);
+      expect(inventory.count(Block.Silk)).toBe(0);
+      // Already worn: a second cuirass is refused and costs nothing.
+      inventory.add(Block.Chitin, 3); inventory.add(Block.Silk, 2);
+      const before = JSON.stringify(inventory.slots);
+      expect(inventory.craft('plate')).toBe(false);
+      expect(JSON.stringify(inventory.slots)).toBe(before);
+    });
+
+    it('the hide guard halves hazards and the claw shiv stacks melee to a cap', () => {
+      const inventory = new Inventory();
+      inventory.add(Block.Hide, 4); inventory.add(Block.Silk, 1);
+      expect(inventory.craft('hideGuard')).toBe(true);
+      expect(inventory.hideGuarded).toBe(true);
+
+      const edge = new Inventory();
+      for (const [id, n] of [[Block.Claw, 4], [Block.Wood, 2]] as const) edge.add(id, n);
+      expect(edge.craft('clawShiv')).toBe(true);
+      expect(edge.edgeBonus).toBe(6);
+      expect(edge.craft('clawShiv')).toBe(true);
+      expect(edge.edgeBonus).toBe(12);
+      // Cap reached: further shivs are refused.
+      edge.add(Block.Claw, 2); edge.add(Block.Wood, 1);
+      const before = JSON.stringify(edge.slots);
+      expect(edge.craft('clawShiv')).toBe(false);
+      expect(JSON.stringify(edge.slots)).toBe(before);
+    });
+
+    it('crafts bandages from silk and counts the consumable', () => {
+      const inventory = new Inventory();
+      inventory.add(Block.Silk, 4);
+      expect(inventory.craft('bandage')).toBe(true);
+      expect(inventory.count(Block.Bandage)).toBe(1);
+      expect(inventory.count(Block.Silk)).toBe(2);
+    });
+  });
 });

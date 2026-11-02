@@ -4,7 +4,8 @@ import { TIER_DURABILITY } from './tools';
 
 export type Recipe =
   | 'torch' | 'weapon' | 'scaffold' | 'totem' | 'beam' | 'chisel'
-  | 'knapPick' | 'knapAxe' | 'knapBlade';
+  | 'knapPick' | 'knapAxe' | 'knapBlade'
+  | 'plate' | 'clawShiv' | 'hideGuard' | 'bandage';
 export type InventorySlot = { id: Block; count: number };
 
 // Ingredient amounts are kept here so they can be tuned without changing the UI.
@@ -18,6 +19,10 @@ export const RECIPES: Record<Recipe, { name: string; description: string }> = {
   knapPick: { name: 'Knapped pick head', description: '2 stone + 1 wood — chip it well for a fine edge' },
   knapAxe: { name: 'Knapped axe head', description: '2 stone + 1 wood — chip it well for a fine edge' },
   knapBlade: { name: 'Knapped blade head', description: '2 stone + 1 wood — chip it well for a fine edge' },
+  plate: { name: 'Chitin cuirass', description: '3 chitin + 2 silk — blunts a third of enemy strikes' },
+  clawShiv: { name: 'Claw shiv', description: '2 claws + 1 wood — adds a bonus to every melee hit (stacks to +12)' },
+  hideGuard: { name: 'Hide guard', description: '4 hide + 1 silk — halves hazard damage (flesh, acid, lightning)' },
+  bandage: { name: 'Bandage', description: '2 silk — select and press F to restore 25 vitality' },
 };
 
 /** The knapping recipes, and the tool head each one produces. */
@@ -41,13 +46,62 @@ const NAMES: Record<number, string> = {
   [Block.Chisel]: 'Chisel',
   [Block.PickHead]: 'Pick head', [Block.AxeHead]: 'Axe head', [Block.BladeHead]: 'Blade head',
   [Block.CopperOre]: 'Copper ore', [Block.EchoGem]: 'Echo gem',
+  [Block.Chitin]: 'Chitin plate', [Block.Silk]: 'Silk fibre', [Block.Hide]: 'Dinosaur hide',
+  [Block.Claw]: 'Claw', [Block.Bandage]: 'Bandage',
 };
+
+/**
+ * One plain-language line per item: what it is for. Minecraft-familiar
+ * usability — a player should be able to read an item and know what it does
+ * and where to get more, without decoding lore.
+ */
+const DESCRIPTIONS: Record<number, string> = {
+  [Block.Dirt]: 'dug from the ground; fills holes',
+  [Block.Grass]: 'sod layer; levels terrain',
+  [Block.Stone]: 'the craft basic — torches, tools, chisels',
+  [Block.Wood]: 'chopped from trees; builds and crafts',
+  [Block.Mud]: 'heavy ground it is easy to stick in',
+  [Block.Glitch]: 'corrupted block; totem ingredient',
+  [Block.Flesh]: 'hazardous ground; totem ingredient',
+  [Block.Bone]: 'deep bone block; a pick breaches it',
+  [Block.Torch]: 'lights your path; restores sanity in the overcast',
+  [Block.Scaffold]: 'quick platform blocks for climbing',
+  [Block.Totem]: 'wards dread and glows in hostile biomes',
+  [Block.Crystal]: 'mine it deeper down; crafts the beam weapon',
+  [Block.CopperOre]: 'shallow ore — first of the metal tiers',
+  [Block.EchoGem]: 'rare deep gem — the strongest future gear',
+  [Block.Skyfruit]: 'dropped by pale trees and felling; a rare find',
+  [Block.Morsel]: 'raw creature meat; heavier kills drop more',
+  [Block.Scorched]: 'lightning-charred wood',
+  [Block.Chisel]: 'carve sub-cells; press G for shapes',
+  [Block.PickHead]: 'knapped pick head — owns your mining tier',
+  [Block.AxeHead]: 'knapped axe head — owns your tool tier',
+  [Block.BladeHead]: 'knapped blade head — sharpens your melee',
+  [Block.Chitin]: 'tough beetle shell; armour and reinforced gear',
+  [Block.Silk]: 'strong insect fibre; bindings, bandages, straps',
+  [Block.Hide]: 'thick scaled hide from grazers and raptors; durable gear',
+  [Block.Claw]: 'a sharp curved talon; blades and cutting tools',
+  [Block.Bandage]: 'select it and press F to patch up 25 vitality',
+};
+
+/** "Name — what it does", for HUD and tooltip use. */
+export function itemLabel(id: Block): string {
+  const name = NAMES[id] ?? 'Unknown';
+  const desc = DESCRIPTIONS[id];
+  return desc ? `${name} — ${desc}` : name;
+}
 
 export class Inventory {
   slots: InventorySlot[] = [];
   selected = 0;
   weapon = false;
   beam = false;
+  /** Chitin cuirass: enemy strikes land for 65% of their normal damage. */
+  armored = false;
+  /** Hide guard: land hazards (acid, flesh, lightning) deal half damage. */
+  hideGuarded = false;
+  /** Claw-shiv melee bonus, 0..12. */
+  edgeBonus = 0;
   /**
    * Best knapping quality achieved, 0 = none, 1 = rough, 2 = good, 3 = fine.
    * Recorded now so the tier survives; the tiered-tools milestone gives it
@@ -120,6 +174,9 @@ export class Inventory {
     trial.selected = this.selected;
     trial.weapon = this.weapon;
     trial.beam = this.beam;
+    trial.armored = this.armored;
+    trial.hideGuarded = this.hideGuarded;
+    trial.edgeBonus = this.edgeBonus;
     let success = false;
     switch (recipe) {
       case 'torch':
@@ -156,12 +213,31 @@ export class Inventory {
         // once the minigame finishes, so the player does not pay for a failure.
         success = trial.remove(Block.Stone, 2) && trial.remove(Block.Wood, 1);
         break;
+      case 'plate':
+        success = !trial.armored && trial.remove(Block.Chitin, 3) && trial.remove(Block.Silk, 2);
+        if (success) trial.armored = true;
+        break;
+      case 'clawShiv':
+        // Stackable up to +12 so a second shiv still means something.
+        success = trial.edgeBonus < 12 && trial.remove(Block.Claw, 2) && trial.remove(Block.Wood, 1);
+        if (success) trial.edgeBonus += 6;
+        break;
+      case 'hideGuard':
+        success = !trial.hideGuarded && trial.remove(Block.Hide, 4) && trial.remove(Block.Silk, 1);
+        if (success) trial.hideGuarded = true;
+        break;
+      case 'bandage':
+        success = trial.remove(Block.Silk, 2) && trial.add(Block.Bandage, 1);
+        break;
     }
     if (!success) return false;
     this.slots = trial.slots;
     this.selected = trial.selected;
     this.weapon = trial.weapon;
     this.beam = trial.beam;
+    this.armored = trial.armored;
+    this.hideGuarded = trial.hideGuarded;
+    this.edgeBonus = trial.edgeBonus;
     return true;
   }
 }
@@ -397,8 +473,8 @@ export class UI {
       const item = this.inventory.slots[i];
       const button = node('button', `slot${this.inventory.selected === i ? ' selected' : ''}`);
       button.type = 'button';
-      button.setAttribute('aria-label', `Slot ${i + 1}: ${item ? `${NAMES[item.id] ?? 'Unknown'} ×${item.count}` : 'empty'}`);
-      button.title = item ? NAMES[item.id] ?? 'Unknown' : 'Empty';
+      button.setAttribute('aria-label', `Slot ${i + 1}: ${item ? itemLabel(item.id) : 'empty'}`);
+      button.title = item ? itemLabel(item.id) : 'Empty';
       button.append(node('span', 'slot-key', String(i + 1)));
       if (item) {
         const icon = node('span', `slot-icon block-${item.id}`);
