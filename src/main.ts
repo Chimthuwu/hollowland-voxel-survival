@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { Block, biomeAt, type Biome, World } from './world';
+import { Block, biomeAt, type Biome, World, worldSeed } from './world';
+import { GENERATION_VERSION } from './landmarks';
 import { Enemies, type Kind } from './entities';
 import { AudioEngine } from './audio';
 import { Inventory, UI, headBlockFor, itemLabel } from './ui';
@@ -14,6 +15,8 @@ import { beamDps, canBreak, effectiveTier, meleeDamage, miningSpec, toolDps } fr
 import { Pickups } from './pickups';
 import { Timber } from './timber';
 import { BeamWeapon } from './beam';
+import { BlockDamage } from './blockDamage';
+import { PewPew } from './pewpew';
 import { PowerUps, REDUCED_GRAVITY, trySpawnPlatform } from './powerups';
 import { placeSky } from './sky';
 import { Critters } from './critters';
@@ -67,7 +70,10 @@ const enemies = new Enemies(scene,world);
 const critters = new Critters(scene,world);
 const chisel = new Chisel(world);
 const audio = new AudioEngine();
-const beam = new BeamWeapon(scene, world, camera);
+// Shared staged block-damage registry: created before the beam so both the
+// crystal beam and the PEW PEW melt blocks through the same state.
+const blockDamage = new BlockDamage(scene);
+const beam = new BeamWeapon(scene, world, camera, blockDamage);
 const powerups = new PowerUps();
 PowerUps.placeAll(world);
 // Sky traversal: the scaffold chain up to the crystal beacon above the clouds.
@@ -84,6 +90,32 @@ const inventory = new Inventory();
 // The player spawns with the beam laser gun so they can mine, place and
 // fight right away instead of gating it behind deep crystal ore.
 inventory.beam = true;
+// The PEW PEW blaster: shared staged block damage with hand tools and the
+// beam. It resolves creatures, forage and mining along one central aim ray.
+const pewpew = new PewPew(blockDamage, {
+  raycast: (o, d, r) => world.raycast(o, d, r),
+  attackEnemy: (o, d, r, dmg, onKill) => enemies.attack(o, d, r, dmg, (pos, kind) => {
+    const list = CREATURE_DROPS[kind] ?? [[Block.Morsel, 1] as [Block, number]];
+    for (const [id, n] of list) for (let i = 0; i < n; i++) loot.spawn(id, pos.clone().setY(pos.y + .4), 1);
+    onKill(pos, kind);
+  }),
+  forage: hit => world.forageFlora(hit.x, hit.z),
+  onBlockBreak: (id, x, y, z) => {
+    if (inventory.add(id)) {
+      world.set(x, y, z, Block.Air);
+      chisel.clear(x, y, z);
+      audio.event('break');
+      timber.notify(x, y, z, player.position);
+      const tier = effectiveTier(inventory.toolTier, false);
+      if (tier > 0 && inventory.wearTool() === 'broken') ui.toast('YOUR TOOL BROKE');
+    }
+  },
+  onImpact: (_family, broken) => audio.event(broken ? 'break' : 'hit'),
+}, camera);
+pewpew.attachScene(scene);
+// The player toggles between the blaster (hold to fire shots) and the crystal
+// beam (hold to melt) with Q; the beam only exists once it is unlocked.
+let activeWeapon: 'pewpew' | 'beam' = 'pewpew';
 let menuOpen = false, started = false, dead = false, deathTimer = 0;
 const settings = loadSettings();
 // The knapping minigame lives in its own overlay host so it can sit above the
@@ -119,6 +151,7 @@ let shakeTimer = 0;
 // Hold-to-mine state: left click damages a block over time instead of
 // removing it instantly. Soft blocks (dirt, wood, leaves…) still break at once.
 let leftMouseDown = false;
+let pewpewFiring = false;
 let mineTarget: { x: number; y: number; z: number; id: Block; health: number } | null = null;
 let mineDamage = 0;
 // Canopy-gloom level: smoothed 0..~.55 darkness applied while the player
@@ -162,7 +195,18 @@ const crackGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.003, 1.003, 1.0
 const crack = new THREE.LineSegments(crackGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthTest: true }));
 crack.visible = false; scene.add(crack);
 function lock(){ if(started && !dead && !menuOpen) renderer.domElement.requestPointerLock(); }
-ui.startButton.addEventListener('click',()=>{started=true;ui.setStarted(true);audio.start();lock();});
+ui.startButton.addEventListener('click',()=>{
+  // A custom seed typed into the start menu takes over the rolled one.
+  const custom=ui.seedInput?.value.trim();
+  if(custom){
+    // Stable string->seed hash so 'HOLLOW' always means the same world.
+    let h=2166136261;
+    for(let i=0;i<custom.length;i++){h^=custom.charCodeAt(i);h=Math.imul(h,16777619);}
+    world.reseed(h>>>0||1);
+    ui.toast('WORLD SEEDED · '+custom.toUpperCase());
+  }
+  started=true;ui.setStarted(true);audio.start();lock();
+});
 renderer.domElement.addEventListener('click',()=>{if(started && !menuOpen && !dead && !document.pointerLockElement)lock();});
 document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement)keys.clear();});
 document.addEventListener('mousemove',e=>{if(document.pointerLockElement!==renderer.domElement || menuOpen || dead)return;const invert=invertTimer>0?-1:1;yaw-=e.movementX*.0022*invert;pitch=clamp(pitch-e.movementY*.0022*invert,-1.52,1.52);});
@@ -171,6 +215,18 @@ document.addEventListener('keydown',e=>{
   if(e.code==='KeyE'){ui.toggleInventory();return;} if(e.code==='KeyC'){ui.toggleCrafting();return;} if(e.code==='KeyP'){ui.toggleSettings();return;} if(e.code==='Escape'){ui.close();return;}
   if(menuOpen || dead)return;
   if(e.code==='KeyV' && !e.repeat)thirdPerson=!thirdPerson;
+  if(e.code==='KeyQ' && !e.repeat){
+    // Weapon swap: pewpew blaster <-> crystal beam (only when unlocked).
+    const next = activeWeapon === 'pewpew' ? 'beam' : 'pewpew';
+    if(next === 'beam' && !inventory.beam){ ui.toast('THE CRYSTAL BEAM IS NOT YOURS YET'); audio.event('break'); }
+    else {
+      activeWeapon = next;
+      pewpewFiring = false;
+      beam.setMouse(false);
+      ui.toast(activeWeapon === 'beam' ? 'CRYSTAL BEAM · SUSTAINED MELT' : 'PEW PEW · RAPID BLASTER');
+      audio.event('shift');
+    }
+  }
   if(e.code==='KeyG' && !e.repeat){const label=chisel.cycleShape();ui.toast(`CHISEL · ${label.toUpperCase()} · LEFT CARVE · RIGHT STAMP`);}
   if(e.code==='KeyF' && !e.repeat){
     // Consumables live in the hotbar: bandages patch you up, raw morsels are
@@ -198,10 +254,6 @@ renderer.domElement.addEventListener('mousedown',e=>{
   const holdingChisel=inventory.selectedItem()?.id===Block.Chisel;
   if(e.button===0){
     leftMouseDown = true;
-    if(inventory.beam){
-      beam.setMouse(true);
-      return;
-    }
     if(holdingChisel){
       // Left click with the chisel shaves the exact sub-cell under the crosshair.
       if(hit){
@@ -209,6 +261,14 @@ renderer.domElement.addEventListener('mousedown',e=>{
         ui.toast(result.action==='missed'?result.label:`CHISEL · ${result.label}`);
         if(result.action!=='missed')audio.event('hit');
       }
+      return;
+    }
+    if(activeWeapon==='pewpew'){
+      pewpewFiring = true;
+      return;
+    }
+    if(inventory.beam){
+      beam.setMouse(true);
       return;
     }
     if(enemies.attack(origin,aimDirection,hit ? Math.min(4.5,hit.distance) : 4.5,meleeDamage(effectiveTier(inventory.toolTier,inventory.beam),inventory.weapon?24:12,inventory.edgeBonus),(pos,kind)=>{
@@ -297,6 +357,7 @@ renderer.domElement.addEventListener('mousedown',e=>{
 renderer.domElement.addEventListener('mouseup',e=>{
   if(e.button===0){
     beam.setMouse(false);
+    pewpewFiring = false;
     leftMouseDown = false;
     if(mineTarget){ mineTarget = null; mineDamage = 0; crack.visible = false; }
   }
@@ -396,7 +457,18 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
         if(res){cellOutline.visible=true;cellOutline.position.set(res.x,res.y,res.z);cellOutline.scale.set(res.sx,res.sy,res.sz);}
         else cellOutline.visible=false;
       } else cellOutline.visible=false;
-    } else {highlight.visible=false;cellOutline.visible=false;}
+      // Interaction prompt: name the action the crosshair offers right now.
+      if(inventory.selectedItem()?.id===Block.Chisel){
+        ui.setPrompt('LEFT — CARVE · RIGHT — STAMP');
+      } else {
+        const gate=canBreak(look.id,effectiveTier(inventory.toolTier,activeWeapon==='beam'));
+        if(!gate.ok)ui.setPrompt(gate.reason);
+        else ui.setPrompt(miningSpec(look.id).soft?'CLICK — BREAK':'HOLD — MINE');
+      }
+    } else {
+      highlight.visible=false;cellOutline.visible=false;
+      ui.setPrompt('');
+    }
 
     // Hold-to-mine: sustained left-click damages a block over time; the time
     // to break depends on the block hardness and the tool tier, so stone and
@@ -470,6 +542,14 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       });
       if(cut>0&&Math.random()<dt*9)audio.event('hit');
       beam.update(dt,eye,aimDirection,6,(id,x,y,z)=>{inventory.add(id);audio.event('break');timber.notify(x,y,z,player.position);if(inventory.toolTier>0&&inventory.wearTool()==='broken')ui.toast('YOUR TOOL BROKE');},inventory.toolTier,inventory.level,cut>0?cut:Infinity);}
+    // PEW PEW: held fire resolves one shot per cooldown window through the
+    // shared block-damage path; the gun handles heat, recoil and feedback.
+    if(pewpewFiring && !dead && document.pointerLockElement===renderer.domElement){
+      pewpew.tier = effectiveTier(inventory.toolTier, false);
+      pewpew.fire(eye, aimDirection);
+    }
+    pewpew.update(dt);
+    blockDamage.update(time);
     avatar.update(p,yaw,thirdPerson);
     lantern.position.copy(eye);lantern.intensity=lit?4:0;
     post.uniforms.uTime.value=time;post.uniforms.uGlitch.value=activeBiome==='glitch'&&!settings.reduceIntensity?1:0;post.uniforms.uPsy.value=Math.min(1.5,(activeBiome==='psychosis'&&!settings.reduceIntensity?1:0)+(phantomTimer>0?.45:0));
@@ -481,7 +561,12 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       if(phantomTimer<=0)phantom.visible=false;
     }
     effectTimer-=dt;const powerStr=powerups.hasGravity?'GRAVITY ✦ ':''+(powerups.hasPlatform?'PLATFORM ✦ ':'');const toolStr=inventory.toolTier>0?`TOOL T${inventory.toolTier}${inventory.toolDurability>0?' ('+inventory.toolDurability+')':''} · `:'';const lvlStr=`LVL ${inventory.level} · `;const sel=inventory.selectedItem();const selStr=sel?` · ${itemLabel(sel.id)}`:'';const hookLabel=HOOKS[activeBiome].label;const info=powerStr+lvlStr+toolStr+timeOfDayLabel(dayPhase_)+' · '+(hookMessage||hookLabel)+selStr;
-    ui.update(health,sanity,stamina,activeBiome,info);
+    // Weapon HUD: the blaster reports live heat/overheat state; the crystal
+    // beam is sustained, so it shows only its label.
+    const weaponHud = activeWeapon==='pewpew'
+      ? pewpew.hudState()
+      : (inventory.beam ? { label: 'CRYSTAL BEAM', heat: 0, overheated: false, recoil: 0 } : undefined);
+    ui.update(health,sanity,stamina,activeBiome,info,weaponHud);
     overlay.recordFrame(dt);
     overlay.render(time,{x:p.x,y:p.y,z:p.z,vy:player.verticalVelocity,biome:activeBiome,health,sanity,stamina,gravity,impact:lastImpact});
   }
@@ -495,12 +580,17 @@ world.update(player.position,0);ui.update(health,sanity,stamina,activeBiome,'');
 // noise on every load. Player state, inventory and progression flags are.
 function captureSave() {
   return {
+    seed: worldSeed(),
+    generationVersion: GENERATION_VERSION,
     player: { x: player.position.x, y: player.position.y, z: player.position.z, health, sanity, stamina },
     inventory: serializeInventory(inventory.slots),
     progression: { weapon: inventory.weapon, beam: inventory.beam, hasGravity: powerups.hasGravity, hasPlatform: powerups.hasPlatform, toolTier: inventory.toolTier, toolDurability: inventory.toolDurability, armored: inventory.armored, hideGuarded: inventory.hideGuarded, edgeBonus: inventory.edgeBonus },
   };
 }
 function applySave(data: SaveData): void {
+  // A seeded save regenerates its own world before the player lands in it.
+  // Saves without a seed (pre-M2) keep the default generation.
+  if (typeof data.seed === 'number') world.reseed(data.seed);
   player.position.set(data.player.x, data.player.y, data.player.z);
   player.verticalVelocity = 0;
   health = clamp(data.player.health, 0, 100);
@@ -531,14 +621,19 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyS') { e.preventDefault(); doSave(); }
   else if (e.code === 'KeyL') { e.preventDefault(); doLoad(); }
 });
-// Load on boot so a returning player resumes where they left off.
+// Load on boot so a returning player resumes where they left off. A fresh
+// world rolls a random seed (bump-able via the start-menu seed field).
 {
   const outcome = readSave();
   if (outcome.status === 'loaded') applySave(outcome.data);
-  else if (outcome.status === 'unsupported') {
-    console.warn('[HL load] ignoring save from a newer version:', outcome.version);
-    clearSave();
+  else {
+    // No usable save: roll a fresh deterministic seed for a brand-new world.
+    world.reseed((Date.now() % 2147483647) || 1);
+    if (outcome.status === 'unsupported') {
+      console.warn('[HL load] ignoring save from a newer version:', outcome.version);
+      clearSave();
+    }
   }
 }
 // Development-only inspection hooks for repeatable browser acceptance tests.
-if(import.meta.env.DEV) (window as unknown as {__hollowland:unknown}).__hollowland={player,world,inventory,enemies,critters,chisel,damage,scene,ui,overlay,beam,powerups,hooks,get state(){return {health,sanity,stamina,activeBiome,gravity,dead,started,menuOpen,lastImpact,hookMessage};},save:doSave,load:doLoad};
+if(import.meta.env.DEV) (window as unknown as {__hollowland:unknown}).__hollowland={player,world,inventory,enemies,critters,chisel,damage,scene,ui,overlay,beam,pewpew,blockDamage,powerups,hooks,get state(){return {health,sanity,stamina,activeBiome,gravity,dead,started,menuOpen,lastImpact,hookMessage,activeWeapon,pewpewFiring,pewpewHeat:pewpew.heat,pewpewOverheated:pewpew.overheated};},save:doSave,load:doLoad};

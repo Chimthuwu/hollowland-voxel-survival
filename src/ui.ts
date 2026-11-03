@@ -334,6 +334,8 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, 
 /** Owns the DOM only. The game owns keyboard, mouse, pointer lock and simulation. */
 export class UI {
   readonly startButton: HTMLButtonElement;
+  /** Optional world-seed field on the start screen. */
+  readonly seedInput: HTMLInputElement;
   private readonly root: HTMLElement;
   private readonly intro: HTMLElement;
   private readonly death: HTMLElement;
@@ -350,6 +352,19 @@ export class UI {
   private toastTimer = 0;
   private readonly biome: HTMLElement;
   private readonly bars: Record<'health' | 'sanity' | 'stamina', HTMLElement>;
+  // Pixel hearts above the hotbar: full / half / empty states with damage and
+  // healing flashes, plus a low-health warning pulse.
+  private readonly heartsEl: HTMLElement;
+  private readonly heartCells: HTMLElement[] = [];
+  private lastHealth = 100;
+  private hurtTimer = 0;
+  private healTimer = 0;
+  // Weapon state: label + heat bar; hidden until a weapon reports state.
+  private readonly weaponEl: HTMLElement;
+  private readonly weaponLabel: HTMLElement;
+  private readonly heatFill: HTMLElement;
+  // Interaction prompt ("E — PLACE", "CLICK — MINE", …) near the crosshair.
+  private readonly promptEl: HTMLElement;
   private openPanel: 'inventory' | 'crafting' | 'settings' | null = null;
   private signature = '';
 
@@ -390,7 +405,7 @@ export class UI {
     crosshair.setAttribute('aria-hidden', 'true');
     this.hotbar = node('div', 'hotbar');
     this.hotbar.setAttribute('aria-label', 'Quick slots');
-    hud.append(corner, this.details, crosshair, this.resumeHint, this.toastEl, this.hotbar);
+    // (elements are appended to the hud after the death screen is built below)
 
     this.inventoryPanel = node('section', 'menu-panel inventory-panel hidden');
     this.inventoryGrid = node('div', 'inventory-grid');
@@ -447,9 +462,17 @@ export class UI {
     for (const [key, action] of [['W A S D', 'MOVE'], ['MOUSE', 'LOOK'], ['SPACE / SHIFT', 'JUMP / SPRINT'], ['LEFT / RIGHT CLICK', 'MINE / PLACE'], ['E / C', 'INVENTORY / CRAFT'], ['1—9 / WHEEL', 'SELECT']]) {
       const row = node('div', 'control'); row.append(node('b', '', key), node('span', '', action)); controls.append(row);
     }
+    // Optional world seed: typing the same text always regenerates the same
+    // world (Milestone 2 deterministic worlds). Blank rolls a fresh one.
+    this.seedInput = node('input', 'seed-input') as HTMLInputElement;
+    this.seedInput.type = 'text';
+    this.seedInput.placeholder = 'WORLD SEED (OPTIONAL)';
+    this.seedInput.maxLength = 24;
+    this.seedInput.spellcheck = false;
+    this.seedInput.setAttribute('aria-label', 'World seed');
     this.startButton = node('button', 'start-button', 'ENTER THE HOLLOW');
     this.startButton.type = 'button';
-    introCard.append(controls, this.startButton, node('p', 'pointer-note', 'Click to play and lock the pointer. Press Esc to release it.'));
+    introCard.append(controls, this.seedInput, this.startButton, node('p', 'pointer-note', 'Click to play and lock the pointer. Press Esc to release it.'));
     this.intro.append(introCard);
 
     this.death = node('div', 'screen-overlay death-screen hidden');
@@ -458,6 +481,25 @@ export class UI {
     this.deathCause = node('p', '', 'The dark takes what it is owed.');
     deathCard.append(this.deathCause);
     this.death.append(deathCard);
+    // Pixel hearts: ten chunky hearts rendered above the hotbar (full / half /
+    // empty), plus the weapon state row and an interaction prompt.
+    this.heartsEl = node('div', 'hearts');
+    for (let i = 0; i < 10; i++) {
+      const heart = node('span', 'heart');
+      heart.setAttribute('aria-hidden', 'true');
+      this.heartsEl.append(heart);
+      this.heartCells.push(heart);
+    }
+    this.weaponEl = node('div', 'weapon-hud hidden');
+    this.weaponLabel = node('span', 'weapon-label', 'PEW PEW');
+    const heatTrack = node('span', 'heat-track');
+    this.heatFill = node('span', 'heat-fill');
+    heatTrack.append(this.heatFill);
+    this.weaponEl.append(this.weaponLabel, heatTrack);
+    this.promptEl = node('div', 'interaction-prompt hidden', '');
+    this.promptEl.setAttribute('aria-live', 'polite');
+    hud.append(corner, this.details, crosshair, this.promptEl, this.resumeHint, this.toastEl, this.heartsEl, this.weaponEl, this.hotbar);
+
     this.root.append(hud, this.inventoryPanel, this.craftingPanel, this.settingsPanel, this.intro, this.death);
     document.body.append(this.root);
     this.refresh();
@@ -474,18 +516,60 @@ export class UI {
 
   /** Called each frame so the toast can fade itself out. */
   tick(dt: number): void {
-    if (this.toastTimer <= 0) return;
-    this.toastTimer -= dt;
-    if (this.toastTimer <= 0) this.toastEl.classList.add('hidden');
+    if (this.toastTimer > 0) {
+      this.toastTimer -= dt;
+      if (this.toastTimer <= 0) this.toastEl.classList.add('hidden');
+    }
+    // Damage / healing flashes on the hearts row clear themselves after a beat.
+    if (this.hurtTimer > 0) {
+      this.hurtTimer -= dt;
+      if (this.hurtTimer <= 0) this.heartsEl.classList.remove('hurt');
+    } else if (this.heartsEl.classList.contains('hurt')) {
+      this.hurtTimer = 0.45;
+    }
+    if (this.healTimer > 0) {
+      this.healTimer -= dt;
+      if (this.healTimer <= 0) this.heartsEl.classList.remove('healed');
+    } else if (this.heartsEl.classList.contains('healed')) {
+      this.healTimer = 0.45;
+    }
   }
 
-  update(health: number, sanity: number, stamina: number, biome: Biome, info: string): void {
+  update(health: number, sanity: number, stamina: number, biome: Biome, info: string, weapon?: { label: string; heat: number; overheated: boolean; recoil: number }): void {
     for (const [key, value] of [['health', health], ['sanity', sanity], ['stamina', stamina]] as const) {
-      this.bars[key].style.width = `${Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0))}%`;
+      this.bars[key].style.width = `${Math.max(0, Math.min(100, value))}%`;
+    }
+    this.renderHearts(health);
+    if (weapon) {
+      this.weaponEl.classList.remove('hidden');
+      this.weaponLabel.textContent = weapon.overheated ? 'OVERHEAT' : weapon.label;
+      this.weaponEl.classList.toggle('overheated', weapon.overheated);
+      this.heatFill.style.width = `${Math.max(0, Math.min(100, weapon.heat * 100))}%`;
     }
     this.biome.textContent = `THE ${biome.toUpperCase()}`;
     this.details.textContent = info;
     this.refresh();
+  }
+
+  /** Ten pixel hearts: full / half / empty cells, damage and healing flashes,
+   *  and a low-health warning class the CSS pulses. */
+  private renderHearts(health: number): void {
+    for (let i = 0; i < this.heartCells.length; i++) {
+      const value = health / 10 - i;
+      this.heartCells[i].classList.toggle('full', value >= 1);
+      this.heartCells[i].classList.toggle('half', value > 0 && value < 1);
+      this.heartCells[i].classList.toggle('empty', value <= 0);
+    }
+    this.heartsEl.classList.toggle('low', health <= 30);
+    if (health < this.lastHealth) this.heartsEl.classList.add('hurt');
+    else if (health > this.lastHealth) this.heartsEl.classList.add('healed');
+    this.lastHealth = health;
+  }
+
+  /** Shows or clears the interaction prompt under the crosshair. */
+  setPrompt(text: string): void {
+    this.promptEl.textContent = text;
+    this.promptEl.classList.toggle('hidden', !text);
   }
 
   toggleInventory(): void { this.setPanel(this.openPanel === 'inventory' ? null : 'inventory'); }

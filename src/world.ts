@@ -4,6 +4,7 @@ import * as forest from './forest';
 import type { TreeShape, TreeCell } from './forest';
 import { appendMicroGeometry, type MicroBuffers, type MicroProfile } from './micro';
 import { buildAtlas, atlasUV } from './textures';
+import { landmarkAtVoxel, isLandmarkSite, setLandmarkContext } from './landmarks';
 
 export enum Block { Air = 0, Dirt, Stone, Wood, Mud, Glitch, Flesh, Bone, Torch, Scaffold, Totem, Scorched, Crystal, GravityCharm, PlatformSeed, Acid, Grass, Skyfruit, Morsel, Chisel, PickHead, AxeHead, BladeHead, CopperOre, EchoGem, Leaf, Chitin, Silk, Hide, Claw, Bandage, Sand, Snow, Water, CopperBar, CrystalBar, EchoBar }
 
@@ -25,6 +26,22 @@ export function biomeAt(x: number, y: number, _z: number): Biome {
   return 'maw';
 }
 
+// --- World seed (Milestone 2: deterministic worlds) ------------------------
+// Every generation hash mixes the world seed, so the same seed always
+// regenerates the same terrain and landmarks regardless of chunk load
+// order. Re-seeding clears every generation cache; the World's reseed()
+// method also drops its instance caches and built chunks.
+let SEED = 0;
+/** The active world seed — read by saves and dev hooks. 0 = unseeded legacy
+ *  generation (bit-identical to the pre-M2 noise field); any reseed() gives a
+ *  fresh, fully deterministic world. */
+export const worldSeed = () => SEED;
+export function setWorldSeed(s: number): void {
+  SEED = s >>> 0;
+  terrainKindCache.clear();
+  waterBodyCache.clear();
+}
+
 const SIZE = 16;
 // Loaded chunk radius: 3 gives a 96-block thread of world visible each way
 // (was 2), matched with the lighter fog so distance finally reads.
@@ -33,7 +50,7 @@ const VERTICAL_RADIUS = 1;
 const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
 const chunkCoord = (v: number) => Math.floor(v / SIZE);
 const hash = (x: number, z: number) => {
-  const n = Math.sin(x * 127.1 + z * 311.7 + 19.19) * 43758.5453123;
+  const n = Math.sin(x * 127.1 + z * 311.7 + SEED * .1731 + 19.19) * 43758.5453123;
   return n - Math.floor(n);
 };
 function noise(x: number, z: number): number {
@@ -46,7 +63,7 @@ function noise(x: number, z: number): number {
 }
 
 const hash3 = (x: number, y: number, z: number) => {
-  const n = Math.sin(x * 127.1 + y * 269.5 + z * 311.7 + 74.7) * 43758.5453123;
+  const n = Math.sin(x * 127.1 + y * 269.5 + z * 311.7 + SEED * .3719 + 74.7) * 43758.5453123;
   return n - Math.floor(n);
 };
 /** Trilinear 3D value noise in [0,1). */
@@ -442,6 +459,13 @@ export class World {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     const edit = this.edits.get(key(x, y, z));
     if (edit !== undefined) return edit;
+    // Landmark framework: ruins, petrified trees, crystal cathedrals and
+    // shrines stamp their voxels over the natural terrain (Air answers
+    // carve). Consulted right after the player-edit check, so a regeneration
+    // never overwrites anything the player placed or dug, and cave-mouth
+    // carving below still shapes the underground through landmarks.
+    const landmark = landmarkAtVoxel(x, y, z);
+    if (landmark !== undefined) return landmark;
     const height = this.surface(x, z);
     if (y > 64) {
       const island = noise(x / 22, z / 22);
@@ -587,11 +611,11 @@ export class World {
     return false;
   }
 
-  /** Spawn clarity, cave-entrance mouths and entrance ramps stay tree-free. */
+  /** Spawn clarity, cave-entrance mouths, entrance ramps and landmark sites stay tree-free. */
   private isProtectedSpot(x: number, z: number): boolean {
     if (Math.abs(x) <= 10 && Math.abs(z) <= 10) return true;
     for (const [ex, ez] of ENTRANCES) if (Math.max(Math.abs(x - ex), Math.abs(z - ez)) <= 2) return true;
-    return false;
+    return isLandmarkSite(x, z);
   }
 
   /** Lazily builds (and caches) the trees that touch one XZ chunk region. */
@@ -635,6 +659,35 @@ export class World {
   isTreeTrunk(x: number, y: number, z: number): boolean {
     const hit = this.treeAtVoxel(x, y, z);
     return hit !== null && hit.cell.kind === 'trunk';
+  }
+
+  /**
+   * Re-seeds this world's generation. Every generation cache (module-level
+   * noise caches and this instance's memoized fields) is cleared and all
+   * built chunks are disposed, so the world regenerates from the new seed.
+   * Player edits are kept only when the seed is unchanged — a seed change
+   * starts a genuinely different world.
+   */
+  reseed(s: number): void {
+    const next = s >>> 0 || 1;
+    const changed = worldSeed() !== next;
+    if (changed) {
+      setWorldSeed(next);
+      for (const chunk of this.chunks.values()) { this.scene.remove(chunk.mesh); chunk.mesh.geometry.dispose(); }
+      this.chunks.clear();
+      this.surfaceCache.clear();
+      this.treesByRegion.clear();
+      this.mouthSpots.clear();
+      this.shaftCells = null;
+    }
+    // The landmark context is bound per call so multiple World instances
+    // (tests build several) always query against the most recent one.
+    setLandmarkContext(next, {
+      surface: (x, z) => this.surface(x, z),
+      waterBodyAt,
+      terrainKindAt,
+      biomeAt,
+    });
   }
 
   /** Sets many cells at once and rebuilds each affected chunk a single time. */

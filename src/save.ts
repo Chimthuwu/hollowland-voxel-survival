@@ -17,6 +17,12 @@ export const SAVE_VERSION = 2;
 export interface SaveData {
   version: number;
   savedAt: number;
+  /** The world seed this save was generated under (Milestone 2). Optional so
+   *  pre-seed saves load unchanged — they regenerate with the default seed. */
+  seed?: number;
+  /** Generator version the terrain was built with; a mismatch means the
+   *  layout moved and terrain edits (unpersisted anyway) would not line up. */
+  generationVersion?: number;
   player: { x: number; y: number; z: number; health: number; sanity: number; stamina: number };
   inventory: Array<{ id: number; count: number }>;
   progression: {

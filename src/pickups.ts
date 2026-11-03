@@ -61,8 +61,14 @@ export class Pickups {
     });
   }
 
-  /** Updates all pickups. Returns the ids collected this tick. */
-  update(dt: number, player: THREE.Vector3): Block[] {
+  /**
+   * Updates all pickups. Returns the ids collected this tick.
+   * The optional `accept` predicate decides whether an item is actually
+   * taken: when it returns false the pickup is left in the world (re-armed
+   * briefly so it does not hammer a full inventory every frame) instead of
+   * silently vanishing. This is the inventory-full safety valve.
+   */
+  update(dt: number, player: THREE.Vector3, accept: (id: Block) => boolean = () => true): Block[] {
     const collected: Block[] = [];
     for (let i = this.items.length - 1; i >= 0; i--) {
       const p = this.items[i];
@@ -101,6 +107,13 @@ export class Pickups {
           dist = Math.hypot(player.x - p.x, player.y + 0.5 - p.y, player.z - p.z);
         }
         if (dist < RADIUS) {
+          // Inventory-full safety: only consume the pickup when the caller
+          // accepts it. A refused item stays in the world and re-arms so it
+          // can be collected later instead of silently vanishing.
+          if (!accept(p.id)) {
+            p.armTimer = 0.9;
+            continue;
+          }
           collected.push(p.id);
           this.scene.remove(p.mesh);
           this.items.splice(i, 1);

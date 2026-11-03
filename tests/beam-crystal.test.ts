@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Block, World } from '../src/world';
 import { BeamWeapon } from '../src/beam';
+import { BlockDamage } from '../src/blockDamage';
 import { Inventory } from '../src/ui';
 
 describe('crystal ore + beam weapon', () => {
@@ -44,7 +45,7 @@ describe('crystal ore + beam weapon', () => {
     const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 100);
     camera.position.set(0.5, 100.5, 0.5);
     camera.lookAt(0, 100, -5);
-    const beam = new BeamWeapon(scene, world, camera);
+    const beam = new BeamWeapon(scene, world, camera, new BlockDamage(scene));
     world.set(0, 100, -1, Block.Stone);
     beam.setMouse(true);
     const origin = new THREE.Vector3(0.5, 100.5, 0.5);
@@ -52,7 +53,7 @@ describe('crystal ore + beam weapon', () => {
     const broken: Block[] = [];
     // 80 dps vs 60 hp stone = 0.75s. Tick 1s in 16ms steps.
     for (let i = 0; i < 80; i++) {
-      const id = beam.update(1 / 60, origin, dir, 6, (bid) => broken.push(bid));
+      const id = beam.update(1 / 60, origin, dir, 6, (bid) => broken.push(bid), 3, 1);
       if (id !== null) break;
     }
     expect(broken).toContain(Block.Stone);

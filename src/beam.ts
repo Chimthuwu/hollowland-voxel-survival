@@ -1,14 +1,7 @@
 import * as THREE from 'three';
 import { Block, type World } from './world';
-import { beamDps, miningSpec } from './tools';
-
-/** Damage per second the beam deals to the targeted block. */
-const BEAM_DPS = 80;
-
-/** Per-block durability comes from the shared mining table. */
-function durability(id: Block): number {
-  return miningSpec(id).hardness;
-}
+import { beamDps, canBreak, miningSpec } from './tools';
+import { BlockDamage } from './blockDamage';
 
 interface BeamTarget {
   x: number;
@@ -29,16 +22,18 @@ export class BeamWeapon {
   private readonly scene: THREE.Scene;
   private readonly world: World;
   private readonly camera: THREE.Camera;
+  private readonly blockDamage: BlockDamage;
   private readonly lineMaterial: THREE.MeshBasicMaterial;
   private readonly line: THREE.Mesh;
   private mouseDown = false;
   private target: BeamTarget | null = null;
   private currentHit: THREE.Vector3 | null = null;
 
-  constructor(scene: THREE.Scene, world: World, camera: THREE.Camera) {
+  constructor(scene: THREE.Scene, world: World, camera: THREE.Camera, blockDamage: BlockDamage) {
     this.scene = scene;
     this.world = world;
     this.camera = camera;
+    this.blockDamage = blockDamage;
 
     this.lineMaterial = new THREE.MeshBasicMaterial({ color: 0x8fffe0, transparent: true, opacity: 0, depthWrite: false });
     // Unit cylinder along +Y; we scale it to span camera->hit per frame.
@@ -53,9 +48,20 @@ export class BeamWeapon {
   /** Whether the beam is currently held down. */
   isActive(): boolean { return this.mouseDown; }
 
-  /** The block currently being melted by the beam, or null. Used for damage
-   *  visualization (cracks) on the targeted block. */
-  targeted(): BeamTarget | null { return this.target; }
+  /** The block currently being melted by the beam, or null. `health` is the
+   *  remaining hardness after the shared damage registry's accrual. */
+  targeted(): BeamTarget | null {
+    if (!this.target) return null;
+    const spec = miningSpec(this.target.id);
+    const remaining = Math.max(0, spec.hardness * (1 - this.blockDamage.ratioAt(this.target.x, this.target.y, this.target.z)));
+    return { ...this.target, health: remaining };
+  }
+
+  /** Clears damage state for a cell whose block was destroyed or replaced. */
+  reset(x: number, y: number, z: number): void {
+    this.target = null;
+    this.blockDamage.reset(x, y, z);
+  }
 
   setMouse(down: boolean): void {
     this.mouseDown = down;
@@ -82,15 +88,28 @@ export class BeamWeapon {
       this.target = null;
     }
     if (!this.target && hit) {
-      this.target = { x: hit.x, y: hit.y, z: hit.z, id: hit.id, health: durability(hit.id) };
+      // Tier gate: the beam refuses tougher blocks it cannot legally mine, and
+      // shows the refusal on the HUD via the gate reason.
+      const gate = canBreak(hit.id, toolTier);
+      if (!gate.ok) {
+        this.target = null;
+      } else {
+        this.target = { x: hit.x, y: hit.y, z: hit.z, id: hit.id, health: miningSpec(hit.id).hardness };
+      }
     }
 
     let broken: Block | null = null;
     if (this.target) {
-      this.target.health -= beamDps(toolTier, level) * dt;
-      if (this.target.health <= 0) {
+      // Damage flows through the shared registry: staged shells, position-keyed
+      // state, resets on replacement, and per-family feedback for free.
+      const result = this.blockDamage.hit(
+        this.target.x, this.target.y, this.target.z, this.target.id,
+        beamDps(toolTier, level) * dt, performance.now() / 1000,
+      );
+      if (result.broken) {
         broken = this.target.id;
         this.world.set(this.target.x, this.target.y, this.target.z, Block.Air);
+        this.blockDamage.reset(this.target.x, this.target.y, this.target.z);
         onBreak(this.target.id, this.target.x, this.target.y, this.target.z);
         this.target = null;
       }

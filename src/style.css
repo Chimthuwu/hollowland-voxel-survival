@@ -77,6 +77,9 @@ button { font: inherit; }
 .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 10px; margin: 30px auto; padding: 22px 0; border-block: 1px solid #b2a28b33; }
 .control b, .control span { display: block; font-size: 9px; letter-spacing: .08em; }
 .control b { color: #e0d4c4; } .control span { margin-top: 5px; color: #8f857a; }
+.seed-input { width: 100%; margin-bottom: 14px; padding: 11px 14px; border: 1px solid #b2a28b55; background: #16141399; color: #e0d4c4; font-size: 10px; letter-spacing: .14em; text-align: center; outline: none; }
+.seed-input::placeholder { color: #8f857a66; }
+.seed-input:focus-visible { border-color: #d4b79a; }
 .start-button { padding: 15px 32px; border: 1px solid #d4b79a; background: #b59a7c; color: #161413; font-size: 10px; font-weight: 700; letter-spacing: .17em; cursor: pointer; }
 .start-button:hover, .start-button:focus-visible { background: #e0c5a4; }
 .pointer-note { color: #8e8378; font-size: 9px; line-height: 1.8; }
@@ -110,4 +113,32 @@ button { font: inherit; }
 .knapping-button { padding: 10px 20px; border: 1px solid #b2a28b55; background: #ffffff08; color: #ded4c4; font-size: 10px; letter-spacing: .12em; cursor: pointer; }
 .knapping-button:hover, .knapping-button:focus-visible { border-color: #d3b890; background: #cbb59318; }
 .knapping-hint { margin: 0; color: #8f857a; font-size: 9px; line-height: 1.9; }
-@media (max-width: 650px) { .hud-corner { top: 18px; left: 18px; } .world-info { top: 18px; right: 18px; } .biome { font-size: 22px; } .slot { width: 10vw; height: 52px; max-width: 51px; } .slot-icon { left: calc(50% - 10px); width: 20px; height: 20px; } .controls { gap: 12px 5px; } .control b, .control span { font-size: 8px; } .menu-panel { padding: 24px; } }
+@media (max-width: 650px) { .hud-corner { top: 18px; left: 18px; } .world-info { top: 18px; right: 18px; } .biome { font-size: 22px; } .slot { width: 10vw; height: 52px; max-width: 51px; } .slot-icon { left: calc(50% - 10px); width: 20px; height: 20px; } .controls { gap: 12px 5px; } .control b, .control span { font-size: 8px; } .menu-panel { padding: 24px; } .hearts { bottom: 96px; } .weapon-hud { bottom: 122px; } }
+
+/* --- Pixel hearts ---------------------------------------------------------
+   Ten chunky hearts centered above the hotbar: full, half and empty states,
+   damage/healing flashes, and a slow red pulse while health is low. */
+.hearts { position: absolute; left: 50%; bottom: 100px; transform: translateX(-50%); display: flex; gap: 4px; }
+.heart { position: relative; width: 16px; height: 16px; image-rendering: pixelated; box-shadow: 0 0 0 1px #00000088; }
+.heart.full { background: #d9463e; box-shadow: 0 0 0 1px #00000088, inset 3px 3px 0 #ffffff44, inset -3px -3px 0 #00000055; }
+.heart.half { background: linear-gradient(90deg, #d9463e 0 50%, #ffffff22 50% 100%); box-shadow: 0 0 0 1px #00000088, inset -3px -3px 0 #00000033; }
+.heart.empty { background: #ffffff18; box-shadow: 0 0 0 1px #00000066; }
+.hearts.low .heart.full, .hearts.low .heart.half { animation: heart-pulse 1.1s steps(2) infinite; }
+@keyframes heart-pulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.9); } }
+.hearts.hurt .heart { animation: heart-shake .28s steps(4) 1; }
+@keyframes heart-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-2px); } 75% { transform: translateX(2px); } }
+.hearts.healed .heart.full, .hearts.healed .heart.half { animation: heart-bright .45s steps(3) 1; }
+@keyframes heart-bright { 0% { filter: brightness(2.2); } 100% { filter: brightness(1); } }
+
+/* --- Weapon state ---------------------------------------------------------
+   Label + heat bar above the hearts: fills as the gun runs hot, turns red and
+   pulses while it is overheated. */
+.weapon-hud { position: absolute; left: 50%; bottom: 126px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; text-shadow: 0 1px 6px #000; }
+.weapon-label { color: #d9cdb8; font-size: 9px; letter-spacing: .16em; }
+.weapon-hud.overheated .weapon-label { color: #ff8b7a; animation: heart-pulse .6s steps(2) infinite; }
+.heat-track { position: relative; width: 84px; height: 6px; background: #ffffff22; border: 1px solid #ffffff33; }
+.heat-fill { display: block; height: 100%; width: 0; background: #8fffe0; transition: width .12s steps(6); }
+.weapon-hud.overheated .heat-fill { background: #e05a4a; }
+
+/* --- Interaction prompt --------------------------------------------------- */
+.interaction-prompt { position: absolute; left: 50%; top: calc(50% + 26px); transform: translateX(-50%); padding: 4px 10px; color: #e9dfd0; background: #111214c9; border: 1px solid #b2a28b55; font-size: 9px; letter-spacing: .12em; white-space: nowrap; }
