@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Block, type Biome, type World } from './world';
-import { exposureAt, lightSourceNear, MOB_LIGHT } from './lighting';
+import { daylightLevel, exposureAt, lightSourceNear, MOB_LIGHT } from './lighting';
 
 type Kind = 'stalker' | 'node' | 'crawler' | 'hallucination' | 'skitter' | 'thrasher' | 'cresthorn' | 'hopper' | 'saurolisk';
 export type { Kind };
@@ -64,22 +64,28 @@ type Mob = {
   lightPt: THREE.Vector3 | null;
 };
 
-const stats: Record<Kind, { hp: number; speed: number; damage: number; size: number }> = {
-  stalker:       { hp: 30,  speed: 3,   damage: 10, size: 1 },
-  node:          { hp: 20,  speed: 3,   damage: 15, size: 1 },
-  crawler:       { hp: 25,  speed: 5,   damage: 12, size: 1 },
-  hallucination: { hp: 20,  speed: 3.8, damage: 8,  size: 1 },
+/** Species-level light response (Milestone 3): what light DOES to a kind.
+ *  fear    — bright light blinds/burns it; placed light denies spawn & harms
+ *  attract — drawn toward placed lights like a moth (a camp lures them)
+ *  neutral — light means nothing to it
+ *  'burn' marks fear kinds that take steady damage in bright light. */
+type LightResponse = 'burn' | 'attract' | 'neutral';
+const stats: Record<Kind, { hp: number; speed: number; damage: number; size: number; light: LightResponse }> = {
+  stalker:       { hp: 30,  speed: 3,   damage: 10, size: 1,    light: 'burn' },
+  node:          { hp: 20,  speed: 3,   damage: 15, size: 1,    light: 'neutral' },
+  crawler:       { hp: 25,  speed: 5,   damage: 12, size: 1,    light: 'neutral' },
+  hallucination: { hp: 20,  speed: 3.8, damage: 8,  size: 1,    light: 'neutral' },
   // Giant burrow bug: towers over the player, still fast and cheap in a
   // pack — a swarm of them reads as a stampede, not a nuisance.
-  skitter:       { hp: 18,  speed: 4.4, damage: 7,  size: 1.8 },
+  skitter:       { hp: 18,  speed: 4.4, damage: 7,  size: 1.8,  light: 'attract' },
   // Armoured beetle: slow, tanky, lunges from a readable telegraphed wind-up.
-  thrasher:      { hp: 66,  speed: 2.1, damage: 18, size: 1.15 },
+  thrasher:      { hp: 66,  speed: 2.1, damage: 18, size: 1.15, light: 'neutral' },
   // Territorial dinosaur: rare, huge, gives a warning display before charging.
-  cresthorn:     { hp: 150, speed: 1.7, damage: 24, size: 2.6 },
+  cresthorn:     { hp: 150, speed: 1.7, damage: 24, size: 2.6,  light: 'neutral' },
   // Spring-mad grazer insect: mid-small, closes ground in anxious bounds.
-  hopper:        { hp: 14,  speed: 2.2, damage: 8,  size: .8 },
+  hopper:        { hp: 14,  speed: 2.2, damage: 8,  size: .8,   light: 'attract' },
   // Pack raptor: the second dinosaur. Fast telegraphed charger, short wind-up.
-  saurolisk:     { hp: 95,  speed: 4.4, damage: 16, size: 1.55 },
+  saurolisk:     { hp: 95,  speed: 4.4, damage: 16, size: 1.55, light: 'neutral' },
 };
 
 function kindFor(b: Biome): Kind {
@@ -527,8 +533,19 @@ export class Enemies {
     const exposure = exposureAt(this.world, x, groundY, z, phase);
     const count = (k: Kind) => this.mobs.reduce((n, m) => n + (m.kind === k ? 1 : 0), 0);
     const at = new THREE.Vector3(x, groundY, z);
+    // Light-gated stalker spawning (Milestone 3): deep shade is their niche,
+    // but a placed light (torch/totem) within 8 blocks denies the spawn
+    // outright in daylight — a campfire circle is stalker-proof ground, so
+    // camping torches is a real strategy instead of a decoration. At night
+    // the light radius reads as only a small halo and stalkers may approach.
+    const daylight = daylightLevel(phase);
     if (exposure < MOB_LIGHT.stalkerHide) {
-      if (Math.random() < .6) this.spawnKind('stalker', at);
+      const denied = lightSourceNear(this.world, at, 8) !== null && daylight > .25;
+      if (!denied && Math.random() < .6) this.spawnKind('stalker', at);
+      else if (denied && Math.random() < .3 && count('skitter') < 9) {
+        // Light-attracted wildlife fills the camp's ring instead.
+        this.spawnKind('skitter', new THREE.Vector3(x + (Math.random() - .5) * 3, groundY, z + (Math.random() - .5) * 3));
+      }
       return;
     }
     const roll = Math.random();
@@ -617,12 +634,25 @@ export class Enemies {
         chase = dist < detect && dist > .9;
         moveX = chase ? dx / dist : 0; moveZ = chase ? dz / dist : 0;
         step = chase ? mob.speed * dt : 0;
-        // A placed light close by burns them: recoil from it instead of fighting.
+        // Species light response — 'burn': a placed light close by recoils
+        // them AND sears them. The burn is why lanterns/weapon-light matter:
+        // hold the light on a stalker and it dies without a blow. Light
+        // deaths drop no loot (the corpse burns away).
         if (playerLit && dist < 6.5) {
           chase = false;
           moveX = -dx / dist; moveZ = -dz / dist;
           step = mob.speed * .75 * dt;
           faceAway = true;
+          const litExposure = Math.max(exposure, .92); // placed light dominates
+          if (litExposure > MOB_LIGHT.stalkerHunt) {
+            mob.hp -= 25 * dt;
+            mob.hitFlash = Math.max(mob.hitFlash, .1);
+            for (const mesh of mob.meshes) mesh.material = this.flashMaterials[mob.kind];
+            if (mob.hp <= 0 && mob.dying <= 0) {
+              mob.dying = DEATH_TIME;
+              this.spawnGibs(mob);
+            }
+          }
         }
       } else if (mob.kind === 'skitter') {
         // Swarms chase; a lone skitter loses its nerve and bolts.
@@ -679,7 +709,7 @@ export class Enemies {
       // the nearer magnet than the player — a lure to bait swarms away from
       // a camp, with the bug pile to fight around it as the price.
       let faceMove = false; // face the travel direction (attraction drift)
-      if (mob.kind === 'skitter' || mob.kind === 'hopper') {
+      if (stats[mob.kind].light === 'attract') {
         mob.lightT -= dt;
         if (mob.lightT <= 0) {
           mob.lightT = .5;
