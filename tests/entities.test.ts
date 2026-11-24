@@ -50,6 +50,22 @@ describe('enemies', () => {
     for (let i = 0; i < 30; i++) enemies.update(1/60, new THREE.Vector3(0,0,0), 'overcast', () => {});
     expect(materialOf()).toBe(before);
   });
+  it('guest mode renders host enemies and never applies local damage', () => {
+    const scene = new THREE.Scene();
+    const enemies = new Enemies(scene, world);
+    enemies.spawn('overcast', new THREE.Vector3(0, 0, -3));
+    const localRoot = scene.children[0];
+    enemies.setRemoteSnapshots([{ id: 'h1', kind: 'stalker', x: 5, y: 0, z: 5, yaw: 0, hp: 10 }]);
+    expect(localRoot.visible).toBe(false);
+    expect(scene.children).toHaveLength(2); // hidden local + host proxy
+    let damage = 0;
+    for (let i = 0; i < 120; i++) enemies.update(1 / 60, new THREE.Vector3(0, 0, 0), 'overcast', n => damage += n);
+    expect(damage).toBe(0);
+    enemies.clearRemote();
+    expect(localRoot.visible).toBe(true);
+    expect(scene.children).toHaveLength(1);
+  });
+
   it('publishes a stable enemy snapshot for host-authoritative multiplayer', () => {
     const enemies = new Enemies(new THREE.Scene(), world);
     enemies.spawn('overcast', new THREE.Vector3(1, 0, 2));

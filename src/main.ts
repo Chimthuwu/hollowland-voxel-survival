@@ -564,6 +564,9 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       netSendTimer -= dt; enemySendTimer -= dt;
       if (netSendTimer <= 0) { netSendTimer = .1; net.sendPlayer({ x: p.x, y: p.y, z: p.z, yaw, pitch, health }); }
       if (enemySendTimer <= 0) { enemySendTimer = .25; net.sendEnemies(enemies.snapshot()); }
+      // Host simulates its own creatures; guests render the host's snapshots.
+      if (net.isHost) enemies.clearRemote();
+      else enemies.setRemoteSnapshots(Object.values(net.room.enemies));
       for (const [peerId, state] of Object.entries(net.room.players)) {
         if (peerId === net.id) continue;
         let mesh = remoteAvatars.get(peerId);

@@ -450,6 +450,9 @@ function buildSaurolisk(material: THREE.Material): { root: THREE.Group; parts: M
 export class Enemies {
   private readonly mobs: Mob[] = [];
   private nextMobId = 0;
+  /** Guest mode: local mobs are hidden and host snapshots drive proxy meshes. */
+  private readonly remoteProxies = new Map<string, THREE.Group>();
+  private remoteMode = false;
   private readonly gibs: Gib[] = [];
   /** One shared gib cube and one cached tinted material per kind. */
   private readonly gibGeometry = new THREE.BoxGeometry(.14, .14, .14);
@@ -538,6 +541,39 @@ export class Enemies {
     }));
   }
 
+  /** Guest mode: render the host's creatures and stop simulating local ones. */
+  setRemoteSnapshots(snapshots: Array<{ id: string; kind: string; x: number; y: number; z: number; yaw: number; hp: number }>): void {
+    this.remoteMode = true;
+    for (const mob of this.mobs) mob.root.visible = false;
+    const live = new Set<string>();
+    for (const snap of snapshots) {
+      if (!(snap.kind in stats)) continue;
+      live.add(snap.id);
+      let proxy = this.remoteProxies.get(snap.id);
+      if (!proxy) {
+        proxy = buildMesh(snap.kind as Kind, this.materials[snap.kind as Kind]).root;
+        proxy.scale.setScalar(stats[snap.kind as Kind].size);
+        this.scene.add(proxy);
+        this.remoteProxies.set(snap.id, proxy);
+      }
+      proxy.position.set(snap.x, snap.y, snap.z);
+      proxy.rotation.y = snap.yaw;
+    }
+    for (const [id, proxy] of this.remoteProxies) {
+      if (live.has(id)) continue;
+      this.scene.remove(proxy);
+      this.remoteProxies.delete(id);
+    }
+  }
+
+  /** Restores local simulation (e.g. after leaving a co-op room). */
+  clearRemote(): void {
+    this.remoteMode = false;
+    for (const mob of this.mobs) mob.root.visible = true;
+    for (const proxy of this.remoteProxies.values()) this.scene.remove(proxy);
+    this.remoteProxies.clear();
+  }
+
   /**
    * The Overcast roster: light decides who lives here. Warm, open ground
    * belongs to oversized wildlife (skitter swarms, thrashers, the rare
@@ -583,6 +619,9 @@ export class Enemies {
     this.spawnTimer -= dt;
     this.simTime += dt;
     this.updateGibs(dt);
+    // Guests do not simulate or suffer local enemies: the host's snapshots are
+    // the only authority. Proxy meshes are positioned by setRemoteSnapshots().
+    if (this.remoteMode) return;
 
     if (this.spawnTimer <= 0) {
       this.spawnTimer = biome === 'overcast' ? 10 : 6;
@@ -936,6 +975,7 @@ export class Enemies {
 
   dispose(): void {
     this.clear();
+    this.clearRemote();
     for (const mat of Object.values(this.materials)) mat.dispose();
     for (const mat of Object.values(this.flashMaterials)) mat.dispose();
     this.gibGeometry.dispose();
