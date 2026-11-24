@@ -86,8 +86,7 @@ export function skyLayout(surface: (x: number, z: number) => number, startX = 10
 export function placeSky(world: World): SkyLayout {
   const layout = skyLayout((x, z) => world.surface(x, z));
   const cells: Array<{ x: number; y: number; z: number }> = [];
-  const special = new Set<string>();
-  const mark = (x: number, y: number, z: number) => { cells.push({ x, y, z }); special.add(`${x},${y},${z}`); };
+  const mark = (x: number, y: number, z: number) => { cells.push({ x, y, z }); };
   for (const slab of layout.slabs)
     for (let dx = 0; dx < slab.w; dx++)
       for (let dz = 0; dz < slab.d; dz++)

@@ -26,6 +26,35 @@ describe('sky traversal layout', () => {
     expect(beacon.w).toBeGreaterThanOrEqual(7);
   });
 
+  it('keeps the beacon reachable from the ground landing by jumpable hops', () => {
+    const surface = (x: number, z: number) => 5 + Math.abs(x * .1 + z) * .2 % 4;
+    const { slabs, beacon, start } = skyLayout(surface);
+    // Start slab meets the ground it rises from; no teleport required.
+    expect(start.y).toBe(Math.max(4, surface(10, 5)));
+    // Walk the chain as a graph: every consecutive landing is at most one
+    // block up and at most one air gap away on a single axis.
+    const nodes = [...slabs, { ...beacon, w: beacon.w, d: beacon.d }];
+    const seen = new Set([0]);
+    const queue = [0];
+    while (queue.length) {
+      const i = queue.shift()!;
+      const a = nodes[i];
+      for (let j = 0; j < nodes.length; j++) {
+        if (seen.has(j)) continue;
+        const b = nodes[j];
+        const dx = Math.abs(a.x - b.x), dz = Math.abs(a.z - b.z);
+        const gapX = Math.max(0, dx - a.w), gapZ = Math.max(0, dz - a.d);
+        const rise = b.y - a.y;
+        // Small epsilon: the chain's y accumulates as a float when the
+        // surface height is fractional.
+        if (rise >= -1e-6 && rise <= 1 + 1e-6 && gapX <= 1 && gapZ <= 1 && (gapX === 0 || gapZ === 0)) {
+          seen.add(j); queue.push(j);
+        }
+      }
+    }
+    expect(seen.has(nodes.length - 1)).toBe(true);
+  });
+
   it('plants the chain and beacon into the live world with the right blocks', () => {
     const world = new World(new THREE.Scene());
     const { slabs, beacon, start } = placeSky(world);

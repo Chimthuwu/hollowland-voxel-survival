@@ -30,7 +30,7 @@ Psychedelic 3D Terraria-like: colorful pixel-arcade beauty, cute at times, deepl
 - [x] Per-biome hazard hooks — one mechanic + cue each (src/biomeHooks.ts): overcast drains sanity faster in the dark with a heartbeat cue, storm lightning, glitch gravity flips, psychosis control inversion, maw flesh eats health, catacombs torches blow out, veins acid pools burn, sky has reduced gravity and faster movement. Acid blocks added at y < -48. Done 2026-11-02.
 
 ## Sky traversal (remaining)
-- [ ] Sky traversal: gravity + platforms as the route above the clouds to hidden sky areas and eventually space. Platform spawn and low gravity both exist, but there are no platform chains, no hidden sky content and no guaranteed reachable target above y=64.
+- [x] Sky traversal (verified 2026-11-25): deterministic scaffold chain climbs one block per hop from a ground landing to a beacon above y=64, with skyfruit, torch waymarks, hidden crystal caches and echo gems; added a BFS reachability regression test and removed a dead set in `placeSky`.
 
 ## Prototype
 - [x] Chunked face-culled voxel terrain, five surface regions, Catacombs and basic sky/veins terrain.
