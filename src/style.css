@@ -170,3 +170,20 @@ button { font: inherit; }
 
 /* --- Interaction prompt --------------------------------------------------- */
 .interaction-prompt { position: absolute; left: 50%; top: calc(50% + 26px); transform: translateX(-50%); padding: 4px 10px; color: #e9dfd0; background: #111214c9; border: 1px solid #b2a28b55; font-size: 9px; letter-spacing: .12em; white-space: nowrap; }
+
+/* Accessibility: honour the OS "reduce motion" preference. The endless
+   low-health/overheat pulses and HUD transitions are atmospheric, but they
+   should never be forced on someone who asked their system to stop them. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* A clear keyboard focus ring everywhere, not only on hover-styled borders. */
+.hollow-ui button:focus-visible, .hollow-ui input:focus-visible {
+  outline: 2px solid #e9dfd0;
+  outline-offset: 2px;
+}

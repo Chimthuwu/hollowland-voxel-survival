@@ -146,6 +146,12 @@ const player = new Player(0.5,world.surface(0,0)+1.01,0.5);
 const avatar = new Avatar(scene);
 const spawn = player.position.clone();
 let health=100, sanity=100, stamina=100, yaw=0, pitch=0, gravity=1, thirdPerson=false, activeBiome:Biome='overcast';
+// Scratch objects reused by the per-frame camera update. Allocating a handful
+// of Vector3/Euler instances every frame was avoidable GC pressure (visible as
+// periodic frame spikes on slower machines).
+const eyeScratch = new THREE.Vector3(), backScratch = new THREE.Vector3(), dirScratch = new THREE.Vector3(), lookScratch = new THREE.Vector3();
+const camEuler = new THREE.Euler();
+const EYE_OFFSET = new THREE.Vector3(0, 1.57, 0), CAM_BACK = new THREE.Vector3(0, .7, 3.5), LOOK_FORWARD = new THREE.Vector3(0, 0, -1);
 let time=0, gravityTimer=0, lightningTimer=6, flashTimer=0, effectTimer=0, invertTimer=0, footsteps=0, lastImpact=0, hookMessage='';
 // Screen shake from felled trees hitting the ground: decays over half a second.
 let shakeTimer = 0;
@@ -521,7 +527,7 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       }
     }
     ui.tick(dt);
-    camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));const reach=cameraBoomLength(world,eye,back,3.5);camera.position.copy(eye).addScaledVector(back.clone().normalize(),reach);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
+    camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=eyeScratch.copy(p).add(EYE_OFFSET);camera.position.copy(eye);if(thirdPerson){const back=backScratch.copy(CAM_BACK).applyEuler(camEuler.set(0,yaw,0));const reach=cameraBoomLength(world,eye,back,3.5);camera.position.copy(eye).addScaledVector(dirScratch.copy(back).normalize(),reach);camera.lookAt(lookScratch.copy(eye).add(dirScratch.copy(LOOK_FORWARD).applyEuler(camEuler.set(pitch,yaw,0))));}
     // Felled-tree impact: position jitter plus a slight roll kick, decaying fast
     // so it reads as a ground punch rather than a wobble.
     if(shakeTimer>0){
