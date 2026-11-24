@@ -9,6 +9,7 @@ import { AudioEngine } from './audio';
 import { Inventory, UI, headBlockFor, itemLabel } from './ui';
 import { Player } from './player';
 import { Avatar } from './avatar';
+import { cameraBoomLength } from './camera';
 import { dayPhase, daylightLevel, nearbyLight, shadeAt, timeOfDayLabel } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
 import { beamDps, canBreak, effectiveTier, meleeDamage, miningSpec, toolDps } from './tools';
@@ -520,7 +521,7 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
       }
     }
     ui.tick(dt);
-    camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));camera.position.add(back);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
+    camera.rotation.order='YXZ';camera.rotation.set(pitch,yaw,0);const eye=p.clone().add(new THREE.Vector3(0,1.57,0));camera.position.copy(eye);if(thirdPerson){const back=new THREE.Vector3(0,.7,3.5).applyEuler(new THREE.Euler(0,yaw,0));const reach=cameraBoomLength(world,eye,back,3.5);camera.position.copy(eye).addScaledVector(back.clone().normalize(),reach);camera.lookAt(eye.clone().add(new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0))));}
     // Felled-tree impact: position jitter plus a slight roll kick, decaying fast
     // so it reads as a ground punch rather than a wobble.
     if(shakeTimer>0){

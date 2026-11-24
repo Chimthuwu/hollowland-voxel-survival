@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Block, type Biome, type World } from './world';
 import { daylightLevel, exposureAt, lightSourceNear, MOB_LIGHT } from './lighting';
+import { detourDirection } from './navigation';
 
 type Kind = 'stalker' | 'node' | 'crawler' | 'hallucination' | 'skitter' | 'thrasher' | 'cresthorn' | 'hopper' | 'saurolisk';
 export type { Kind };
@@ -735,9 +736,16 @@ export class Enemies {
           mob.teleport -= dt;
           if (mob.teleport <= 0) { step = Math.min(2, dist - 1); mob.teleport = 2 + Math.random(); }
         }
+        const solid = (x: number, y: number, z: number) => this.world.get(x, y, z) !== Block.Air;
         const nx = p.x + moveX * step, nz = p.z + moveZ * step;
         if (this.world.get(nx, p.y + .3, nz) !== Block.Air) {
+          // A low step can be jumped; otherwise skirt the obstacle instead of
+          // pressing into it forever.
           if (this.world.get(nx, p.y + 1.1, nz) === Block.Air && this.world.get(nx, p.y + 2 * mob.size, nz) === Block.Air && Math.abs(mob.vy) < .01) mob.vy = 6.2;
+          else {
+            const around = detourDirection(solid, p.x, p.y, p.z, moveX, moveZ);
+            p.x += around.x * step; p.z += around.z * step;
+          }
         } else { p.x = nx; p.z = nz; }
       }
       // Face travel; wary chargers and lurkers face the player.
