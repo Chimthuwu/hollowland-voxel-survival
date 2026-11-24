@@ -39,6 +39,8 @@ export interface RoomState {
 }
 
 export type Message =
+  | { t: 'joined'; id: string; room: string }
+  | { t: 'full' }
   | { t: 'player'; state: PlayerState }
   | { t: 'leave'; id: string }
   | { t: 'edit'; edit: WorldEdit }
@@ -131,6 +133,9 @@ export function decode(raw: string): Message | null {
   if (!value || typeof value !== 'object') return null;
   const m = value as Record<string, unknown>;
   switch (m.t) {
+    case 'joined': return typeof m.id === 'string' && typeof m.room === 'string'
+      ? { t: 'joined', id: m.id, room: m.room } : null;
+    case 'full': return { t: 'full' };
     case 'player': return isPlayerState(m.state) ? { t: 'player', state: m.state } : null;
     case 'leave': return typeof m.id === 'string' ? { t: 'leave', id: m.id } : null;
     case 'edit': return isWorldEdit(m.edit) ? { t: 'edit', edit: m.edit } : null;
