@@ -32,7 +32,7 @@ const clamp = THREE.MathUtils.clamp;
 // Biome scene palettes, recolored in the art pivot so every hostile region
 // reads at a glance: storm is cold electric teal, glitch is hot orchid
 // magenta, psychosis is a pale sick mauve, and the maw is a deep gore red.
-const colors: Record<Biome, number> = {overcast:0x474058, storm:0x16222e, glitch:0x40144c, psychosis:0x3b2e40, maw:0x4a0d13, catacombs:0x0b0b10, veins:0x29090f, sky:0x31333d};
+const colors: Record<Biome, number> = {overcast:0x474058, storm:0x109d9d, glitch:0xff1493, psychosis:0xa0522d, maw:0x580f0a, catacombs:0x0b0b10, veins:0x29090f, sky:0x31333d};
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(colors.overcast);
 scene.fog = new THREE.FogExp2(colors.overcast, 0.019);

@@ -253,11 +253,11 @@ export function appendUndergrowth(
           }
         } else if (r > .935) {
           const FLORA: Record<string, Array<[number, number, number]>> = {
-            overcast: [[.91, .63, .78], [.62, .91, .88], [.95, .85, .54]],
-            storm: [[.66, .74, .92]],
-            glitch: [[.95, .45, .95], [.45, .95, .88]],
-            psychosis: [[.85, .30, .38]],
-            maw: [[.80, .40, .34]],
+            overcast: [[.85, .50, .70], [.55, .75, .85], [.80, .65, .90]],
+            storm: [[.10, .75, .85], [.20, .85, .95]],       // electric teal glow
+            glitch: [[.95, .30, .65], [.55, .75, .95]],     // vivid orchid-magenta
+            psychosis: [[.70, .20, .40], [.55, .30, .50]], // pale sick mauve family
+            maw: [[.55, .10, .15], [.65, .20, .25]],        // deep gore red family
           };
           const palette = FLORA[biome];
           if (palette) {
