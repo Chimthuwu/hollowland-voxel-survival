@@ -41,7 +41,7 @@ Psychedelic 3D Terraria-like: colorful pixel-arcade beauty, cute at times, deepl
 - [ ] Human playtest, accessibility pass and real-hardware 60 FPS profiling; fix frame spikes and darkness.
 - [ ] Flesh out the extended design: Psychosis shifting terrain and look-away hallucinations; Maw pits/particles; Glitch block swaps; sky eye; richer biome textures and props.
 - [x] Unarmed mining: decided to keep the tiered tool progression (bare hands = soft blocks only; stone/copper = tier 1, crystal = tier 2, echo gem = tier 3; beam counts as tier 3). The todo premise was stale — `tests/tools.test.ts` already proves bare hands cannot break stone/ore. DECISION checkpoint `0918978` (2026-11-25). No gameplay change required.
-- [ ] Enemy navigation (mobs path on flat ground only) and third-person camera clipping.
+- [x] Enemy navigation + third-person camera clipping (2026-11-25): mobs now try 90°/45° detours when a wall blocks their chase (pure `detourDirection` in src/navigation.ts, 4 tests) instead of grinding into it; the third-person boom is raycast-clamped short of terrain with a minimum head distance (`cameraBoomLength` in src/camera.ts, 4 tests). Complex long-range maze pathfinding is recorded in Inbox.
 
 ## Decisions made (review me)
 - 2026-11-25 — Question: should the beam be strictly required for stone/ore? Choice: no, keep tiered tools (current tested behavior); checkpoint `0918978332a0885c2972c2f677b960dcd4065490`. Reason: beam-only would remove working progression and strand pre-beam players.
