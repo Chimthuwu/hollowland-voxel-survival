@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { Block } from '../src/world';
-import { Inventory, missingIngredients } from '../src/ui';
+import { Inventory, hudBiomeClass, missingIngredients } from '../src/ui';
+
+describe('HUD biome tints', () => {
+  it('tints only the four vivid biomes so the CSS classes can actually be applied', () => {
+    expect(hudBiomeClass('storm')).toBe('storm');
+    expect(hudBiomeClass('glitch')).toBe('glitch');
+    expect(hudBiomeClass('psychosis')).toBe('psychosis');
+    expect(hudBiomeClass('maw')).toBe('maw');
+    for (const biome of ['overcast', 'catacombs', 'veins', 'sky'] as const)
+      expect(hudBiomeClass(biome)).toBe('');
+  });
+});
 
 describe('Inventory', () => {
   it('stacks resources and removes only what is available', () => {

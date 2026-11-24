@@ -10,6 +10,11 @@ export type Recipe =
   | 'smeltCopper' | 'smeltCrystal' | 'smeltEcho';
 export type InventorySlot = { id: Block; count: number };
 
+/** HUD tint suffix for the vivid biomes; neutral biomes keep the default palette. */
+export function hudBiomeClass(biome: Biome): string {
+  return biome === 'storm' || biome === 'glitch' || biome === 'psychosis' || biome === 'maw' ? biome : '';
+}
+
 // Ingredient amounts are kept here so they can be tuned without changing the UI.
 // `cost` drives the live have/need chips in the crafting panel, so a player can
 // see exactly what a recipe wants and what they already carry.
@@ -352,6 +357,8 @@ export class UI {
   private toastTimer = 0;
   private readonly biome: HTMLElement;
   private readonly bars: Record<'health' | 'sanity' | 'stamina', HTMLElement>;
+  private readonly vitalRows: HTMLElement[] = [];
+  private lastBiomeTint = '';
   // Pixel hearts above the hotbar: full / half / empty states with damage and
   // healing flashes, plus a low-health warning pulse.
   private readonly heartsEl: HTMLElement;
@@ -393,7 +400,7 @@ export class UI {
       row.append(node('span', 'vital-label', label));
       const track = node('span', 'vital-track');
       const fill = node('span', 'vital-fill');
-      track.append(fill); row.append(track); vitals.append(row); this.bars[key] = fill;
+      track.append(fill); row.append(track); vitals.append(row); this.bars[key] = fill; this.vitalRows.push(row);
     }
     corner.append(vitals);
     this.details = node('div', 'world-info', '');
@@ -538,6 +545,20 @@ export class UI {
   update(health: number, sanity: number, stamina: number, biome: Biome, info: string, weapon?: { label: string; heat: number; overheated: boolean; recoil: number }): void {
     for (const [key, value] of [['health', health], ['sanity', sanity], ['stamina', stamina]] as const) {
       this.bars[key].style.width = `${Math.max(0, Math.min(100, value))}%`;
+    }
+    // The vivid-biome HUD tints are CSS classes; apply them only when the
+    // biome changes so the per-frame update does not thrash class lists.
+    const tint = hudBiomeClass(biome);
+    if (tint !== this.lastBiomeTint) {
+      for (const row of this.vitalRows) {
+        if (this.lastBiomeTint) row.classList.remove(`vital-${this.lastBiomeTint}`);
+        if (tint) row.classList.add(`vital-${tint}`);
+      }
+      for (const el of [this.heartsEl, this.weaponEl]) {
+        if (this.lastBiomeTint) el.classList.remove(this.lastBiomeTint);
+        if (tint) el.classList.add(tint);
+      }
+      this.lastBiomeTint = tint;
     }
     this.renderHearts(health);
     if (weapon) {
