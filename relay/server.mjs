@@ -73,7 +73,7 @@ export function createRelay() {
           if (enemy && typeof enemy.id === 'string' && finite(enemy.x) && finite(enemy.y) && finite(enemy.z))
             room.enemies[enemy.id] = enemy;
         }
-        broadcast(room, { t: 'enemies', from: id, enemies: msg.enemies.slice(0, 64) }, socket);
+        broadcast(room, { t: 'enemies', from: id, enemies: Object.values(room.enemies) }, socket);
         break;
       default:
         break;

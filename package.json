@@ -11,13 +11,13 @@
     "relay": "node relay/server.mjs"
   },
   "dependencies": {
-    "three": "^0.170.0"
+    "three": "^0.170.0",
+    "ws": "^8.23.0"
   },
   "devDependencies": {
     "@types/three": "^0.170.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
-    "vitest": "^4.1.12",
-    "ws": "^8.23.0"
+    "vitest": "^4.1.12"
   }
 }

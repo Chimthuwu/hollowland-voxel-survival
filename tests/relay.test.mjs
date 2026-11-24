@@ -54,6 +54,10 @@ describe('relay rooms', () => {
     relay.receive(a, JSON.stringify({ t: 'enemies', from: 'a', enemies }));
     expect(relay.rooms.get('test').enemies.e1.kind).toBe('stalker');
     expect(b.last().t).toBe('enemies');
+    // Invalid entries are dropped before the snapshot is forwarded to peers.
+    relay.receive(a, JSON.stringify({ t: 'enemies', from: 'a', enemies: [{ id: 'bad', x: NaN, y: 0, z: 0 }, ...enemies] }));
+    expect(b.last().enemies).toHaveLength(1);
+    expect(b.last().enemies[0].id).toBe('e1');
   });
 
   it('removes a departing player and broadcasts the leave', () => {

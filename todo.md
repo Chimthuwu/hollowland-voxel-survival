@@ -48,3 +48,14 @@ Psychedelic 3D Terraria-like: colorful pixel-arcade beauty, cute at times, deepl
 - 2026-11-25 — Question: should the beam be strictly required for stone/ore? Choice: no, keep tiered tools (current tested behavior); checkpoint `0918978332a0885c2972c2f677b960dcd4065490`. Reason: beam-only would remove working progression and strand pre-beam players.
 - 2026-11-25 — Question: how should the sky eye be implemented? Choice: deterministic decorative eye from existing blocks above the beacon, no combat/loot; checkpoint `98ddfd8c6e61d3489fec2078a640ac74e751b427`. Reason: delivers the visual landmark without a new AI/balance system.
 - 2026-11-25 — Question: which multiplayer architecture to use? Choice: deterministic-world relay forwarding player state, block edits and host-only enemy snapshots; lowest client id is host; checkpoint `34e96141ca0f8b8727cc40d168701ac8de5d6f8f`. Reason: no server-side world generation, smallest transport, preserves single-player logic.
+
+## Inbox (agent-proposed)
+- [ ] **Relay origin allowlist** [P2] [security] [size:S]
+  Why: any website can currently open a WebSocket to a locally reachable relay and join a room (cross-site WebSocket hijacking).
+  Done when: connections with an Origin outside an env-configured allowlist are rejected, with a unit test for allowed/blocked origins.
+  Hints: check `req.headers.origin` in the `connection` handler; default to allowing missing Origin (native clients) and set `ALLOWED_ORIGINS` for deployments.
+- [ ] **Per-socket message rate limits** [P2] [security] [size:M]
+  Why: a malicious client can flood edits (4096-cell history) and enemy snapshots at the relay, evicting legitimate edits and burning bandwidth.
+  Done when: each socket is capped on player/edit/enemy messages per second and test proves excess messages are dropped without kicking honest clients.
+  Hints: token bucket per socket in `createRelay().receive`; reuse the existing validation before counting.
+
