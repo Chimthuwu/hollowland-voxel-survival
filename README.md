@@ -32,3 +32,7 @@ Crafting: Torch = 1 wood + 1 stone; Stone Weapon = 2 wood + 3 stone; Scaffold = 
 Progression: mine crystal ore in the deep stone layer, craft the beam weapon, then find the gravity charm and platform seed in the cave entrances. The beam is a hold-to-fire tool; the platform seed spawns a scaffold underfoot on right-click.
 
 This is an early prototype, not a finished survival game. Performance, accessibility, and game balance need further playtesting.
+
+## Co-op rooms (experimental)
+
+Start the relay with `npm run relay` (Node 20+, listens on port 8787, override with `PORT`). Then open the game with `?room=name&id=yourname` in each browser — for a relay on another host add `&relay=wss://relay.example`. Rooms hold at most six players. The world is regenerated from its seed on every client, so only player transforms, block edits and host-authored enemy snapshots cross the wire. `GET /health` on the relay returns `ok`.

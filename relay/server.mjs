@@ -117,5 +117,8 @@ export function startRelay({ port = Number(process.env.PORT || 8787), host = '0.
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const started = startRelay();
-  console.log(`Hollowland relay listening on ${started.server.address().port}`);
+  started.server.once('listening', () => {
+    const address = started.server.address();
+    console.log(`Hollowland relay listening on ${address && typeof address === 'object' ? address.port : 'unknown'}`);
+  });
 }

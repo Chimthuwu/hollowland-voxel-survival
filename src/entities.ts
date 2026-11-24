@@ -32,6 +32,8 @@ interface Gib {
 }
 
 type Mob = {
+  /** Stable id used by the host to publish enemy snapshots to peers. */
+  id: string;
   root: THREE.Group;
   kind: Kind;
   hp: number;
@@ -447,6 +449,7 @@ function buildSaurolisk(material: THREE.Material): { root: THREE.Group; parts: M
 
 export class Enemies {
   private readonly mobs: Mob[] = [];
+  private nextMobId = 0;
   private readonly gibs: Gib[] = [];
   /** One shared gib cube and one cached tinted material per kind. */
   private readonly gibGeometry = new THREE.BoxGeometry(.14, .14, .14);
@@ -505,6 +508,7 @@ export class Enemies {
     const meshes: THREE.Mesh[] = [];
     root.traverse(obj => { if (obj instanceof THREE.Mesh) meshes.push(obj); });
     this.mobs.push({
+      id: `m${++this.nextMobId}`,
       root, kind, ...data,
       cooldown: 0,
       teleport: 2,
@@ -523,6 +527,15 @@ export class Enemies {
       lightT: Math.random() * .6,
       lightPt: null,
     });
+  }
+
+  /** Host-authoritative enemy snapshot for the multiplayer relay. */
+  snapshot(): Array<{ id: string; kind: Kind; x: number; y: number; z: number; yaw: number; hp: number }> {
+    return this.mobs.filter(m => m.dying <= 0).map(m => ({
+      id: m.id, kind: m.kind,
+      x: m.root.position.x, y: m.root.position.y, z: m.root.position.z,
+      yaw: m.root.rotation.y, hp: m.hp,
+    }));
   }
 
   /**

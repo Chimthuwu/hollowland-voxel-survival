@@ -50,6 +50,17 @@ describe('enemies', () => {
     for (let i = 0; i < 30; i++) enemies.update(1/60, new THREE.Vector3(0,0,0), 'overcast', () => {});
     expect(materialOf()).toBe(before);
   });
+  it('publishes a stable enemy snapshot for host-authoritative multiplayer', () => {
+    const enemies = new Enemies(new THREE.Scene(), world);
+    enemies.spawn('overcast', new THREE.Vector3(1, 0, 2));
+    const first = enemies.snapshot();
+    expect(first).toHaveLength(1);
+    expect(first[0].kind).toBe('stalker');
+    expect(first[0].x).toBe(1);
+    enemies.update(1 / 60, new THREE.Vector3(0, 0, 0), 'overcast', () => {});
+    expect(enemies.snapshot()[0].id).toBe(first[0].id);
+  });
+
   it('cannot attack enemies outside range or behind the player', () => {
     const enemies = new Enemies(new THREE.Scene(), world); enemies.spawn('maw',new THREE.Vector3(0,0,4));
     expect(enemies.attack(new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,-1),5,100)).toBe(false);

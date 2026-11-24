@@ -10,6 +10,7 @@ import { Inventory, UI, headBlockFor, itemLabel } from './ui';
 import { Player } from './player';
 import { Avatar } from './avatar';
 import { cameraBoomLength } from './camera';
+import { NetClient, type SocketLike } from './net/client';
 import { dayPhase, daylightLevel, nearbyLight, shadeAt, timeOfDayLabel } from './lighting';
 import { DebugOverlay, type DamageSource } from './debugOverlay';
 import { beamDps, canBreak, effectiveTier, meleeDamage, miningSpec, toolDps } from './tools';
@@ -79,6 +80,37 @@ const powerups = new PowerUps();
 PowerUps.placeAll(world);
 // Sky traversal: the scaffold chain up to the crystal beacon above the clouds.
 placeSky(world);
+// Optional co-op room: ?room=name&relay=ws://host:8787&id=your-id
+// Terrain is deterministic from the seed, so only player transforms, block
+// edits and host-authored enemy snapshots cross the wire.
+const netParams = new URLSearchParams(location.search);
+const netRoom = netParams.get('room');
+let net: NetClient | null = null;
+const remoteAvatars = new Map<string, THREE.Mesh>();
+const remoteGeo = new THREE.BoxGeometry(.55, 1.55, .55);
+const remoteMats = new Map<string, THREE.MeshStandardMaterial>();
+let applyingRemoteEdit = false;
+let netSendTimer = 0, enemySendTimer = 0;
+if (netRoom) {
+  const relayUrl = netParams.get('relay') || `ws://${location.hostname}:8787`;
+  const id = netParams.get('id') || Math.random().toString(36).slice(2, 10);
+  const url = `${relayUrl}${relayUrl.includes('?') ? '&' : '?'}room=${encodeURIComponent(netRoom)}&id=${encodeURIComponent(id)}`;
+  const socket = new WebSocket(url);
+  net = new NetClient(socket as unknown as SocketLike, id, {
+    onJoin: (joined, room) => ui.toast(`CO-OP · ${room} · ${joined === id ? (net?.isHost ? 'YOU ARE HOST' : 'YOU ARE A GUEST') : joined}`),
+    onFull: () => ui.toast('ROOM FULL (6 PLAYERS)'),
+    onEdit: edit => {
+      applyingRemoteEdit = true;
+      world.set(edit.x, edit.y, edit.z, edit.block as Block);
+      applyingRemoteEdit = false;
+    },
+  });
+  const originalSet = world.set.bind(world);
+  world.set = (x, y, z, id) => {
+    originalSet(x, y, z, id);
+    if (!applyingRemoteEdit) net?.sendEdit({ x, y, z, block: id });
+  };
+}
 const hooks = new BiomeHooks(world);
 const loot = new Pickups(scene, (x, y, z) => world.get(x, y, z) !== Block.Air);
 // Tree felling: a removed base trunk cell topples the whole tree and spills wood.
@@ -524,6 +556,33 @@ function animate(){requestAnimationFrame(animate);const now=performance.now()/10
         (crack.material as THREE.LineBasicMaterial).opacity = ratio;
       } else {
         crack.visible = false;
+      }
+    }
+    // Co-op: send this player's transform, mirror peers as simple avatars, and
+    // let the host publish enemy positions. Guests never author enemy state.
+    if (net) {
+      netSendTimer -= dt; enemySendTimer -= dt;
+      if (netSendTimer <= 0) { netSendTimer = .1; net.sendPlayer({ x: p.x, y: p.y, z: p.z, yaw, pitch, health }); }
+      if (enemySendTimer <= 0) { enemySendTimer = .25; net.sendEnemies(enemies.snapshot()); }
+      for (const [peerId, state] of Object.entries(net.room.players)) {
+        if (peerId === net.id) continue;
+        let mesh = remoteAvatars.get(peerId);
+        if (!mesh) {
+          let material = remoteMats.get(peerId);
+          if (!material) {
+            let hash = 0;
+            for (const ch of peerId) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+            material = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(Math.abs(hash % 360) / 360, .7, .55) });
+            remoteMats.set(peerId, material);
+          }
+          mesh = new THREE.Mesh(remoteGeo, material);
+          scene.add(mesh); remoteAvatars.set(peerId, mesh);
+        }
+        mesh.position.set(state.x, state.y + .9, state.z);
+        mesh.rotation.y = state.yaw;
+      }
+      for (const [peerId, mesh] of remoteAvatars) {
+        if (!net.room.players[peerId]) { scene.remove(mesh); remoteAvatars.delete(peerId); }
       }
     }
     ui.tick(dt);
