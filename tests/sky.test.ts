@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { Block, World } from '../src/world';
 import { placeSky, skyLayout } from '../src/sky';
+import { skyEyeLayout } from '../src/skyEye';
 
 describe('sky traversal layout', () => {
   it('is deterministic for the same surface function', () => {
@@ -55,9 +56,20 @@ describe('sky traversal layout', () => {
     expect(seen.has(nodes.length - 1)).toBe(true);
   });
 
+  it('hangs a deterministic decorative eye above the beacon', () => {
+    const beacon = { x: 10, y: 66, z: 12, w: 7, d: 7 };
+    const eye = skyEyeLayout(beacon);
+    expect(JSON.stringify(eye)).toBe(JSON.stringify(skyEyeLayout(beacon)));
+    expect(eye.center.y).toBeGreaterThan(beacon.y);
+    expect(eye.sclera).toHaveLength(24); // 7x7 square ring
+    expect(eye.iris).toHaveLength(8);    // 3x3 iris minus the pupil
+    expect(eye.sclera.every(p => p.y === eye.center.y)).toBe(true);
+    expect(eye.pupil).toEqual(eye.center);
+  });
+
   it('plants the chain and beacon into the live world with the right blocks', () => {
     const world = new World(new THREE.Scene());
-    const { slabs, beacon, start } = placeSky(world);
+    const { slabs, beacon, start, eye } = placeSky(world);
     // Every slab cell is scaffold; the first landing replaces the ground top.
     expect(world.get(start.x, start.y, start.z)).toBe(Block.Scaffold);
     for (const slab of slabs) expect(world.get(slab.x + slab.w - 1, slab.y, slab.z + slab.d - 1)).toBe(Block.Scaffold);
@@ -73,6 +85,11 @@ describe('sky traversal layout', () => {
     const fruited = slabs.filter(s => s.fruit);
     expect(fruited.length).toBeGreaterThan(0);
     for (const slab of fruited) expect(world.get(slab.x + 1, slab.y + 1, slab.z + 1)).toBe(Block.Skyfruit);
+    // The sky eye: crystal ring, echo-gem iris, scorched pupil, all in the air.
+    expect(eye).toBeDefined();
+    for (const p of eye!.sclera) expect(world.get(p.x, p.y, p.z)).toBe(Block.Crystal);
+    for (const p of eye!.iris) expect(world.get(p.x, p.y, p.z)).toBe(Block.EchoGem);
+    expect(world.get(eye!.pupil.x, eye!.pupil.y, eye!.pupil.z)).toBe(Block.Scorched);
     world.dispose();
   });
 });

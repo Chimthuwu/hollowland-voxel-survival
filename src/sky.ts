@@ -1,4 +1,5 @@
 import { Block, type World } from './world';
+import { placeSkyEye, type SkyEyeLayout } from './skyEye';
 
 /**
  * Sky traversal.
@@ -34,6 +35,8 @@ export interface SkyLayout {
   start: SkySlab;
   slabs: SkySlab[];
   beacon: SkyBeacon;
+  /** The decorative eye watching the climb from above the beacon. */
+  eye?: SkyEyeLayout;
 }
 
 /**
@@ -107,5 +110,6 @@ export function placeSky(world: World): SkyLayout {
   for (const gem of beacon.gems) world.set(gem.x, gem.y, gem.z, Block.EchoGem);
   world.set(beacon.totem.x, beacon.totem.y, beacon.totem.z, Block.Totem);
   for (const crystal of beacon.crystals) world.set(crystal.x, crystal.y, crystal.z, Block.Crystal);
+  layout.eye = placeSkyEye(world, beacon);
   return layout;
 }
