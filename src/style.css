@@ -55,6 +55,11 @@ button { font: inherit; }
 .block-24 { background: #c7b3ff; } .block-25 { background: #9980c6; }
 .block-26 { background: #9ab58e; } .block-27 { background: #d9d2ec; } .block-28 { background: #93735f; }
 .block-29 { background: #e4dcc4; } .block-30 { background: #f0ece2; }
+/* Terrain-variety blocks and smelted bars: every item slot needs a pixel icon. */
+.block-31 { background: #cbb98a; } .block-32 { background: #e9eef2; } .block-33 { background: #1e4f66; }
+.block-34 { background: #b87333; box-shadow: 0 0 8px #b8733355, inset 4px 4px 0 #ffffff2e, inset -5px -5px 0 #00000055; }
+.block-35 { background: #6fe0d0; box-shadow: 0 0 8px #6fe0d055, inset 4px 4px 0 #ffffff2e, inset -5px -5px 0 #00000055; }
+.block-36 { background: #c7b3ff; box-shadow: 0 0 8px #c7b3ff55, inset 4px 4px 0 #ffffff2e, inset -5px -5px 0 #00000055; }
 .slot-name { position: absolute; bottom: 4px; left: 4px; max-width: 39px; overflow: hidden; color: #c4b9aa; font-size: 7px; text-transform: uppercase; white-space: nowrap; }
 .slot-count { position: absolute; right: 4px; bottom: 3px; font-size: 10px; }
 .menu-panel { position: absolute; left: 50%; top: 50%; width: min(490px, calc(100vw - 32px)); max-height: calc(100vh - 145px); padding: 30px 34px; overflow: auto; border: 1px solid #b2a28b66; background: #111214f2; box-shadow: 0 16px 80px #000b; transform: translate(-50%, -55%); pointer-events: auto; }
